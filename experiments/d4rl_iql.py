@@ -34,17 +34,23 @@ wandb_config = WandBLogger.get_default_config()
 wandb_config.update({
     'project': 'd4rl_test',
     'exp_prefix': 'iql_test',
-    'exp_descriptor': 'm_iql_{env_name}',
+    'exp_descriptor': 'iql_{env_name}',
 })
 
 config_flags.DEFINE_config_dict('wandb', wandb_config, lock_config=False)
 config_flags.DEFINE_config_dict('config', learner.get_default_config(), lock_config=False)
 
+def get_normalization(dataset):
+        returns = []
+        ret = 0
+        for r, term in zip(dataset['rewards'], dataset['dones_float']):
+            ret += r
+            if term:
+                returns.append(ret)
+                ret = 0
+        return (max(returns) - min(returns)) / 1000
+
 def main(_):
-    # Format exp_descriptor
-    FLAG_DICT = {k: getattr(FLAGS, k) for k in FLAGS}
-    FLAG_DICT.update(FLAGS.config.to_dict())
-    FLAGS.wandb.exp_descriptor = FLAGS.wandb.exp_descriptor.format(**FLAG_DICT)
 
     # Create wandb logger
     wandb_logger = WandBLogger(
@@ -57,30 +63,16 @@ def main(_):
     
     env = d4rl_utils.make_env(FLAGS.env_name)
     dataset = d4rl_utils.get_dataset(env)
-    def get_normalization(dataset):
-        returns = []
-        ret = 0
-        for r, term in zip(dataset['rewards'], dataset['dones_float']):
-            ret += r
-            if term:
-                returns.append(ret)
-                ret = 0
-        return (max(returns) - min(returns)) / 1000
+
     normalizing_factor = get_normalization(dataset)
-    print('Scaling rewards down by: ', normalizing_factor)
     dataset = dataset.copy({'rewards': dataset['rewards'] / normalizing_factor})
 
-    print('Config: ', FLAGS.config)
     example_batch = dataset.sample(1)
     agent = learner.create_learner(FLAGS.seed,
                     example_batch['observations'],
                     example_batch['actions'],
                     max_steps=FLAGS.max_steps,
                     **FLAGS.config)
-
-    def add_with_prefix(d, d_to_add, prefix):
-        for k, v in d_to_add.items():
-            d[f'{prefix}{k}'] = v
     
     for i in tqdm.tqdm(range(1, FLAGS.max_steps + 1),
                        smoothing=0.1,
@@ -90,19 +82,15 @@ def main(_):
         agent, update_info = agent.update(batch)
 
         if i % FLAGS.log_interval == 0:
-            train_metrics = dict(iteration=i)
-            add_with_prefix(train_metrics, update_info, 'training/')
+            train_metrics = {f'training/{k}': v for k, v in update_info.items()}
             wandb_logger.log(train_metrics, step=i)
 
         if i % FLAGS.eval_interval == 0:
-            policy_fn = supply_rng(agent.sample_actions)
+            policy_fn = partial(supply_rng(agent.sample_actions), temperature=0.0)
             eval_info = evaluate(policy_fn, env, num_episodes=FLAGS.eval_episodes)
 
-            eval_metrics = dict()
-            add_with_prefix(eval_metrics, eval_info, 'evaluation/')
+            eval_metrics = {f'evaluation/{k}': v for k, v in eval_info.items()}
             wandb_logger.log(eval_metrics, step=i)
-
-            print(eval_metrics)
 
         if i % FLAGS.save_interval == 0:
             save_dict = dict(

@@ -43,10 +43,6 @@ config_flags.DEFINE_config_dict('wandb', wandb_config, lock_config=False)
 config_flags.DEFINE_config_dict('config', learner.get_default_config(), lock_config=False)
 
 def main(_):
-    # Format exp_descriptor
-    FLAG_DICT = {k: getattr(FLAGS, k) for k in FLAGS}
-    FLAG_DICT.update(FLAGS.config.to_dict())
-    FLAGS.wandb.exp_descriptor = FLAGS.wandb.exp_descriptor.format(**FLAG_DICT)
 
     # Create wandb logger
     wandb_logger = WandBLogger(
@@ -59,8 +55,6 @@ def main(_):
     
     env = EpisodeMonitor(gym.make(FLAGS.env_name))
     eval_env = EpisodeMonitor(gym.make(FLAGS.env_name))
-    # env = make_env(FLAGS.env_name, FLAGS.seed, None)
-    # eval_env = make_env(FLAGS.env_name, FLAGS.seed + 42, None)
     
     example_transition = dict(
         observations=env.observation_space.sample(),
@@ -70,18 +64,13 @@ def main(_):
         next_observations=env.observation_space.sample(),
     )
 
-    replay_buffer = ReplayBuffer.create(example_transition, size=1000000)
-    print('Config: ', FLAGS.config)
+    replay_buffer = ReplayBuffer.create(example_transition, size=int(1e6))
+
     agent = learner.create_learner(FLAGS.seed,
                     example_transition['observations'][None],
                     example_transition['actions'][None],
                     max_steps=FLAGS.max_steps,
                     **FLAGS.config)
-
-    def add_with_prefix(d, d_to_add, prefix):
-        for k, v in d_to_add.items():
-            d[f'{prefix}{k}'] = v
-        return d
     
     exploration_metrics = dict()
     obs = env.reset()    
@@ -110,7 +99,7 @@ def main(_):
         obs = next_obs
 
         if done:
-            add_with_prefix(exploration_metrics, flatten(info), 'exploration/')
+            exploration_metrics = {f'exploration/{k}': v for k, v in flatten(info).items()}
             obs = env.reset()
 
         if replay_buffer.size < FLAGS.start_steps:
@@ -120,8 +109,7 @@ def main(_):
         agent, update_info = agent.update(batch)
 
         if i % FLAGS.log_interval == 0:
-            train_metrics = dict(iteration=i)
-            add_with_prefix(train_metrics, update_info, 'training/')
+            train_metrics = {f'training/{k}': v for k, v in update_info.items()}
             wandb_logger.log(train_metrics, step=i)
             wandb_logger.log(exploration_metrics, step=i)
             exploration_metrics = dict()
@@ -130,12 +118,8 @@ def main(_):
             policy_fn = partial(supply_rng(agent.sample_actions), temperature=0.0)
             eval_info = evaluate(policy_fn, eval_env, num_episodes=FLAGS.eval_episodes)
 
-            eval_metrics = dict()
-            add_with_prefix(eval_metrics, eval_info, 'evaluation/')
+            eval_metrics = {f'evaluation/{k}': v for k, v in eval_info.items()}
             wandb_logger.log(eval_metrics, step=i)
-
-            print(train_metrics)
-            print(eval_metrics)
 
         if i % FLAGS.save_interval == 0:
             save_dict = dict(
