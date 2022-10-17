@@ -2,15 +2,26 @@
 
 This project serves as a "central backbone" for an RL codebase, designed to accelerate prototyping and diagnosis of **new** algorithms (although it auxiliarily does contain reference implementations of SAC, CQL, IQL, BC). It borrows greatly from Ilya Kostrikov's  [JaxRL](https://github.com/ikostrikov/jaxrl) codebase. 
 
-The primary goal of the codebase is to make ease of coding up a new algorithm: towards this goal, the primary philosophy is that **algorithms should be single-file implementations**. This means that (almost) all components of the algorithm (from update rule to network choices to hyperparameter choices) are all contained in one file (e.g. see [BC example](jaxrl_m/example_agents/continuous_bc.py)). This makes it easy to read and understand the algorithm, and also makes it easy to modify the algorithm to test out new ideas. The code is also designed to scale as easily as possible to multi-GPU / TPU setups, with simple abstractions for distributed training.
+The primary goal of the codebase is to make ease of coding up a new algorithm: towards this goal, the primary philosophy is that 
+
+> algorithms should be single-file implementations
+
+This means that (almost) all components of the algorithm (from update rule to network choices to hyperparameter choices) are all contained in one file (e.g. see [BC example](jaxrl_m/example_agents/continuous_bc.py)). This makes it easy to read and understand the algorithm, and also makes it easy to modify the algorithm to test out new ideas. The code is also designed to scale as easily as possible to multi-GPU / TPU setups, with simple abstractions for distributed training.
 
 ## Installation
 
-Requires `jax`, `flax`, `optax`, `distrax`, and optionally `wandb` for logging. Clone this repository and install it (e.g. `pip install -e .`).
+Requires `jax`, `flax`, `optax`, `distrax`, and optionally `wandb` for logging. Clone this repository and install it (e.g. `pip install -e .`) or add to python path.
 
 ## Usage
 
-The fastest way to understand how to use this skeleton is to see the reference SAC implementation: [Agent: sac.py](custom_agents/mujoco/sac.py) and [Launcher: mujoco_sac.py](experiments/mujoco_sac.py)
+The fastest way to understand how to use this skeleton is to see the reference SAC implementation: 
+
+[Agent: sac.py](custom_agents/mujoco/sac.py)
+
+[Launcher: mujoco_sac.py](experiments/mujoco_sac.py)
+
+
+### Structure
 
 The code contains the following files:
 
@@ -21,6 +32,8 @@ The code contains the following files:
 - [jaxrl_m.wandb](jaxrl_m/wandb.py): Contains code for easily setting up Weights & Biases for experiments
 - [jaxrl_m.typing](jaxrl_m/typing.py): Useful type aliases
 - [jaxrl_m.vision](jaxrl_m/vision/__init__.py): `vision.models` contains common vision models (e.g. ResNet, ResNetV2, Impala), `vision.data_augmentations` contains common augmentations (e.g. random crop, random color jitter, gaussian blur)
+
+### Examples
 
 Example implementations:
 
