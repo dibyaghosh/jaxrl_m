@@ -108,7 +108,7 @@ class Critic(nn.Module):
                      activations=self.activations)(inputs)
         return jnp.squeeze(critic, -1)
 
-def ensemblize(cls, num_qs, out_axes=0):
+def ensemblize(cls, num_qs, out_axes=0, **kwargs):
     """
     Useful for making ensembles of Q functions (e.g. double Q in SAC).
 
@@ -122,7 +122,8 @@ def ensemblize(cls, num_qs, out_axes=0):
                 split_rngs={'params': True},
                 in_axes=None,
                 out_axes=out_axes,
-                axis_size=num_qs)
+                axis_size=num_qs,
+                **kwargs)
 
 class ValueCritic(nn.Module):
     hidden_dims: Sequence[int]
