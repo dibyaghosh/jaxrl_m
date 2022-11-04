@@ -9,7 +9,8 @@ import gym
 
 from custom_agents.mujoco import sac as learner
 
-from jaxrl_m.wandb import WandBLogger
+from jaxrl_m.wandb import setup_wandb, default_wandb_config
+import wandb
 from jaxrl_m.evaluation import supply_rng, evaluate, flatten, EpisodeMonitor
 from jaxrl_m.dataset import ReplayBuffer
 
@@ -32,7 +33,7 @@ flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
 flags.DEFINE_integer('max_steps', int(1e6), 'Number of training steps.')
 flags.DEFINE_integer('start_steps', int(1e4), 'Number of initial exploration steps.')
 
-wandb_config = WandBLogger.get_default_config()
+wandb_config = default_wandb_config()
 wandb_config.update({
     'project': 'd4rl_test',
     'exp_prefix': 'sac_test',
@@ -45,12 +46,9 @@ config_flags.DEFINE_config_dict('config', learner.get_default_config(), lock_con
 def main(_):
 
     # Create wandb logger
-    wandb_logger = WandBLogger(
-        wandb_config=FLAGS.wandb,
-        variant=FLAGS.config.to_dict(),
-    )
+    setup_wandb(FLAGS.config.to_dict(), **FLAGS.wandb)
 
-    FLAGS.save_dir = os.path.join(FLAGS.save_dir, FLAGS.wandb.exp_prefix, wandb_logger.experiment_id)
+    FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.config.exp_prefix, wandb.config.experiment_id)
     os.makedirs(FLAGS.save_dir, exist_ok=True)
     
     env = EpisodeMonitor(gym.make(FLAGS.env_name))
@@ -110,8 +108,8 @@ def main(_):
 
         if i % FLAGS.log_interval == 0:
             train_metrics = {f'training/{k}': v for k, v in update_info.items()}
-            wandb_logger.log(train_metrics, step=i)
-            wandb_logger.log(exploration_metrics, step=i)
+            wandb.log(train_metrics, step=i)
+            wandb.log(exploration_metrics, step=i)
             exploration_metrics = dict()
 
         if i % FLAGS.eval_interval == 0:
@@ -119,7 +117,7 @@ def main(_):
             eval_info = evaluate(policy_fn, eval_env, num_episodes=FLAGS.eval_episodes)
 
             eval_metrics = {f'evaluation/{k}': v for k, v in eval_info.items()}
-            wandb_logger.log(eval_metrics, step=i)
+            wandb.log(eval_metrics, step=i)
 
         if i % FLAGS.save_interval == 0:
             save_dict = dict(

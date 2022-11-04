@@ -9,7 +9,8 @@ import tqdm
 from custom_agents.mujoco import iql as learner
 from custom_agents.mujoco import d4rl_utils
 
-from jaxrl_m.wandb import WandBLogger
+from jaxrl_m.wandb import setup_wandb, default_wandb_config
+import wandb
 from jaxrl_m.evaluation import supply_rng, evaluate
 
 from ml_collections import config_flags
@@ -30,7 +31,7 @@ flags.DEFINE_integer('save_interval', 25000, 'Eval interval.')
 flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
 flags.DEFINE_integer('max_steps', int(1e6), 'Number of training steps.')
 
-wandb_config = WandBLogger.get_default_config()
+wandb_config = default_wandb_config()
 wandb_config.update({
     'project': 'd4rl_test',
     'exp_prefix': 'iql_test',
@@ -53,12 +54,9 @@ def get_normalization(dataset):
 def main(_):
 
     # Create wandb logger
-    wandb_logger = WandBLogger(
-        wandb_config=FLAGS.wandb,
-        variant=FLAGS.config.to_dict(),
-    )
+    setup_wandb(FLAGS.config.to_dict(), **FLAGS.wandb)
 
-    FLAGS.save_dir = os.path.join(FLAGS.save_dir, FLAGS.wandb.exp_prefix, wandb_logger.experiment_id)
+    FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.config.exp_prefix, wandb.config.experiment_id)
     os.makedirs(FLAGS.save_dir, exist_ok=True)
     
     env = d4rl_utils.make_env(FLAGS.env_name)
@@ -83,14 +81,14 @@ def main(_):
 
         if i % FLAGS.log_interval == 0:
             train_metrics = {f'training/{k}': v for k, v in update_info.items()}
-            wandb_logger.log(train_metrics, step=i)
+            wandb.log(train_metrics, step=i)
 
         if i % FLAGS.eval_interval == 0:
             policy_fn = partial(supply_rng(agent.sample_actions), temperature=0.0)
             eval_info = evaluate(policy_fn, env, num_episodes=FLAGS.eval_episodes)
 
             eval_metrics = {f'evaluation/{k}': v for k, v in eval_info.items()}
-            wandb_logger.log(eval_metrics, step=i)
+            wandb.log(eval_metrics, step=i)
 
         if i % FLAGS.save_interval == 0:
             save_dict = dict(
