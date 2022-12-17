@@ -161,11 +161,11 @@ class Policy(nn.Module):
 
         distribution = distrax.MultivariateNormalDiag(loc=means, scale_diag=jnp.exp(log_stds) * temperature)
         if self.tanh_squash_distribution:
-            distribution = distrax.Transformed(distribution, BlockWithMode(distrax.Tanh(), ndims=1))
+            distribution = TransformedWithMode(distribution, distrax.Block(distrax.Tanh(), ndims=1))
 
         return distribution
 
-class BlockWithMode(distrax.Block):
+class TransformedWithMode(distrax.Transformed):
 
     def mode(self) -> jnp.ndarray:
         return self.bijector.forward(self.distribution.mode())
