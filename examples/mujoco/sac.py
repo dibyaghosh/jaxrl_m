@@ -33,7 +33,6 @@ class SACAgent(flax.struct.PyTreeNode):
 
     @jax.jit
     def update(agent, batch: Batch):
-
         new_rng, curr_key, next_key = jax.random.split(agent.rng, 3)
 
         def critic_loss_fn(critic_params):

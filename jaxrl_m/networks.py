@@ -1,3 +1,17 @@
+"""Common networks used in RL.
+
+This file contains nn.Module definitions for common networks used in RL. It is divided into three sets:
+
+1) Common Networks: MLP
+2) Common RL Networks:
+    For discrete action spaces: DiscreteCritic is a Q-function
+    For continuous action spaces: Critic, ValueCritic, and Policy provide the Q-function, value function, and policy respectively.
+    For ensembling: ensemblize() provides a wrapper for creating ensembles of networks (e.g. for min-Q / double-Q)
+3) Meta Networks for vision tasks:
+    WithEncoder: Combines a fully connected network with an encoder network (encoder may come from jaxrl_m.vision)
+    ActorCritic: Same as WithEncoder, but for possibly many different networks (e.g. actor, critic, value)
+"""
+
 import collections
 from jaxrl_m.typing import *
 
@@ -8,6 +22,12 @@ import distrax
 import flax.linen as nn
 import jax.numpy as jnp
 
+###############################
+#
+#  Common Networks
+#
+###############################
+
 def default_init(scale: Optional[float] = 1.0):
     return nn.initializers.variance_scaling(scale, "fan_avg", "uniform")
 
@@ -15,10 +35,11 @@ class MLP(nn.Module):
     hidden_dims: Sequence[int]
     activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu
     activate_final: int = False
+    kernel_init: Callable[[PRNGKey, Shape, Dtype], Array] = default_init()
 
     def setup(self):
         self.layers = [
-            nn.Dense(size, kernel_init=default_init())
+            nn.Dense(size, kernel_init=self.kernel_init)
              for size in self.hidden_dims
         ]
 
@@ -29,72 +50,23 @@ class MLP(nn.Module):
                 x = self.activations(x)
         return x
 
-def get_latent(encoder, observations):
-    """
+###############################
+#
+#
+#  Common RL Networks
+#
+###############################
 
-    Get latent representation from encoder. If observations has 
-        a state and image component, then concatenate the latents.
-
-    """
-    if encoder is None:
-        return observations
-
-    elif isinstance(observations, dict):
-        return jnp.concatenate([
-            encoder(observations['image']),
-            observations['state']
-        ], axis=-1)
-
-    else:
-        return encoder(observations)
-
-class WithEncoder(nn.Module):
-
-    encoder: nn.Module
-    network: nn.Module
-
-    def __call__(self, observations, *args, **kwargs):
-        latents = get_latent(self.encoder, observations)
-        return self.network(latents, *args, **kwargs)
-
-class ActorCritic(nn.Module):
-
-    encoders: Dict[str, nn.Module]
-    networks: Dict[str, nn.Module]
-
-    def actor(self, observations, **kwargs):
-        latents = get_latent(self.encoders['actor'], observations)
-        return self.networks['actor'](latents, **kwargs)
-    
-    def critic(self, observations, actions, **kwargs):
-        latents = get_latent(self.encoders['critic'], observations)
-        return self.networks['critic'](latents, actions)
-    
-    def value(self, observations, **kwargs):
-        latents = get_latent(self.encoders['value'], observations)
-        return self.networks['value'](latents)
-
-    def __call__(self, observations, actions):
-        rets = {}
-        if 'actor' in self.networks:
-            rets['actor'] = self.actor(observations)
-        if 'critic' in self.networks:
-            rets['critic'] = self.critic(observations, actions)
-        if 'value' in self.networks:
-            rets['value'] = self.value(observations)
-        return rets
 
 class DiscreteCritic(nn.Module):
     hidden_dims: Sequence[int]
     n_actions: int
     activations: Callable[[jnp.ndarray], jnp.ndarray] = nn.relu
 
-    def setup(self):
-        self.q = MLP((*self.hidden_dims, self.n_actions),
-                     activations=self.activations)
-
+    @nn.compact
     def __call__(self, observations: jnp.ndarray) -> jnp.ndarray:
-        return self.q(observations)
+        return MLP((*self.hidden_dims, self.n_actions),
+                     activations=self.activations)(observations)
 
 class Critic(nn.Module):
     hidden_dims: Sequence[int]
@@ -169,3 +141,87 @@ class TransformedWithMode(distrax.Transformed):
 
     def mode(self) -> jnp.ndarray:
         return self.bijector.forward(self.distribution.mode())
+
+
+
+###############################
+#
+#
+#   Meta Networks for Encoders 
+#
+###############################
+
+def get_latent(encoder: nn.Module, observations: Union[jnp.ndarray, Dict[str, jnp.ndarray]]):
+    """
+
+    Get latent representation from encoder. If observations is a dict 
+        a state and image component, then concatenate the latents.
+
+    """
+    if encoder is None:
+        return observations
+
+    elif isinstance(observations, dict):
+        return jnp.concatenate([
+            encoder(observations['image']),
+            observations['state']
+        ], axis=-1)
+
+    else:
+        return encoder(observations)
+
+class WithEncoder(nn.Module):
+
+    encoder: nn.Module
+    network: nn.Module
+
+    def __call__(self, observations, *args, **kwargs):
+        latents = get_latent(self.encoder, observations)
+        return self.network(latents, *args, **kwargs)
+
+class ActorCritic(nn.Module):
+    """Combines FC networks with encoders for actor, critic, and value.
+
+    Note: You can share encoder parameters between actor and critic by passing in the same encoder definition for both.
+
+    Example:
+
+        encoder_def = ImpalaEncoder()
+        actor_def = Policy(...)
+        critic_def = Critic(...)
+        # This will share the encoder between actor and critic
+        model_def = ActorCritic(
+            encoders={'actor': encoder_def, 'critic': encoder_def},
+            networks={'actor': actor_def, 'critic': critic_def}
+        )
+        # This will have separate encoders for actor and critic
+        model_def = ActorCritic(
+            encoders={'actor': encoder_def, 'critic': copy.deepcopy(encoder_def)},
+            networks={'actor': actor_def, 'critic': critic_def}
+        )
+    """
+
+    encoders: Dict[str, nn.Module]
+    networks: Dict[str, nn.Module]
+
+    def actor(self, observations, **kwargs):
+        latents = get_latent(self.encoders['actor'], observations)
+        return self.networks['actor'](latents, **kwargs)
+    
+    def critic(self, observations, actions, **kwargs):
+        latents = get_latent(self.encoders['critic'], observations)
+        return self.networks['critic'](latents, actions, **kwargs)
+    
+    def value(self, observations, **kwargs):
+        latents = get_latent(self.encoders['value'], observations)
+        return self.networks['value'](latents, **kwargs)
+
+    def __call__(self, observations, actions):
+        rets = {}
+        if 'actor' in self.networks:
+            rets['actor'] = self.actor(observations)
+        if 'critic' in self.networks:
+            rets['critic'] = self.critic(observations, actions)
+        if 'value' in self.networks:
+            rets['value'] = self.value(observations)
+        return rets

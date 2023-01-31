@@ -6,7 +6,7 @@ The primary goal of the codebase is to make ease of coding up a new algorithm: t
 
 > algorithms should be single-file implementations
 
-This means that (almost) all components of the algorithm (from update rule to network choices to hyperparameter choices) are all contained in one file (e.g. see [BC example](jaxrl_m/example_agents/continuous_bc.py)). This makes it easy to read and understand the algorithm, and also makes it easy to modify the algorithm to test out new ideas. The code is also designed to scale as easily as possible to multi-GPU / TPU setups, with simple abstractions for distributed training.
+This means that (almost) all components of the algorithm (from update rule to network choices to hyperparameter choices) are all contained in one file (e.g. see [BC example](examples/vision_agents/continuous_bc.py) or [SAC example](examples/mujoco/sac.py)). This makes it easy to read and understand the algorithm, and also makes it easy to modify the algorithm to test out new ideas. The code is also designed to scale as easily as possible to multi-GPU / TPU setups, with simple abstractions for distributed training.
 
 ## Installation
 
@@ -16,9 +16,9 @@ Requires `jax`, `flax`, `optax`, `distrax`, and optionally `wandb` for logging. 
 
 The fastest way to understand how to use this skeleton is to see the reference SAC implementation: 
 
-[Agent: sac.py](custom_agents/mujoco/sac.py)
+[Agent: sac.py](examples/mujoco/sac.py)
 
-[Launcher: mujoco_sac.py](experiments/mujoco_sac.py)
+[Launcher: run_mujoco_sac.py](examples/mujoco/run_mujoco_sac.py)
 
 
 ### Structure
@@ -37,12 +37,13 @@ The code contains the following files:
 
 Example implementations:
 
-1. [Continuous BC](jaxrl_m/example_agents/continuous_bc.py)
-2. [Discrete BC](jaxrl_m/example_agents/discrete_bc.py)
-3. [SAC](custom_agents/mujoco/sac.py)
-3. [IQL](custom_agents/mujoco/iql.py)
+1. [SAC](examples/mujoco/sac.py)
+2. [IQL](examples/mujoco/iql.py)
+3. [Continuous BC](examples/vision_agents/continuous_bc.py)
+4. [Discrete BC](examples/vision_agents/discrete_bc.py)
+
 
 Example Launchers:
 
-1. [Mujoco SAC](experiments/mujoco_sac.py)
-2. [D4RL IQL](experiments/d4rl_iql.py)
+1. [Mujoco SAC](examples/mujoco/run_mujoco_sac.py)
+2. [D4RL IQL](examples/mujoco/run_d4rl_iql.py)

@@ -7,7 +7,7 @@ import flax
 import tqdm
 import gym
 
-from custom_agents.mujoco import sac as learner
+import sac as learner
 
 from jaxrl_m.wandb import setup_wandb, default_wandb_config
 import wandb
@@ -21,7 +21,7 @@ import pickle
 FLAGS = flags.FLAGS
 flags.DEFINE_string('env_name', 'HalfCheetah-v2', 'Environment name.')
 
-flags.DEFINE_string('save_dir', 'experiment_output/', 'Logging dir.')
+flags.DEFINE_string('save_dir', None, 'Logging dir.')
 
 flags.DEFINE_integer('seed', np.random.choice(1000000), 'Random seed.')
 flags.DEFINE_integer('eval_episodes', 10,
@@ -36,8 +36,8 @@ flags.DEFINE_integer('start_steps', int(1e4), 'Number of initial exploration ste
 wandb_config = default_wandb_config()
 wandb_config.update({
     'project': 'd4rl_test',
-    'exp_prefix': 'sac_test',
-    'exp_descriptor': 'sac_{env_name}',
+    'group': 'sac_test',
+    'name': 'sac_{env_name}',
 })
 
 config_flags.DEFINE_config_dict('wandb', wandb_config, lock_config=False)
@@ -48,8 +48,9 @@ def main(_):
     # Create wandb logger
     setup_wandb(FLAGS.config.to_dict(), **FLAGS.wandb)
 
-    FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.config.exp_prefix, wandb.config.experiment_id)
-    os.makedirs(FLAGS.save_dir, exist_ok=True)
+    if FLAGS.save_dir is not None:
+        FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, wandb.config.exp_prefix, wandb.config.experiment_id)
+        os.makedirs(FLAGS.save_dir, exist_ok=True)
     
     env = EpisodeMonitor(gym.make(FLAGS.env_name))
     eval_env = EpisodeMonitor(gym.make(FLAGS.env_name))
@@ -119,7 +120,7 @@ def main(_):
             eval_metrics = {f'evaluation/{k}': v for k, v in eval_info.items()}
             wandb.log(eval_metrics, step=i)
 
-        if i % FLAGS.save_interval == 0:
+        if i % FLAGS.save_interval == 0 and FLAGS.save_dir is not None:
             save_dict = dict(
                 agent=flax.serialization.to_state_dict(agent),
                 config=FLAGS.config.to_dict()

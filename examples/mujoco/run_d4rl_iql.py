@@ -6,8 +6,8 @@ import jax
 import flax
 
 import tqdm
-from custom_agents.mujoco import iql as learner
-from custom_agents.mujoco import d4rl_utils
+import iql as learner
+import d4rl_utils
 
 from jaxrl_m.wandb import setup_wandb, default_wandb_config
 import wandb
@@ -20,7 +20,7 @@ import pickle
 FLAGS = flags.FLAGS
 flags.DEFINE_string('env_name', 'halfcheetah-expert-v2', 'Environment name.')
 
-flags.DEFINE_string('save_dir', f'experiment_output/', 'Logging dir.')
+flags.DEFINE_string('save_dir', None, 'Logging dir (if not None, save params).')
 
 flags.DEFINE_integer('seed', np.random.choice(1000000), 'Random seed.')
 flags.DEFINE_integer('eval_episodes', 10,
@@ -34,8 +34,8 @@ flags.DEFINE_integer('max_steps', int(1e6), 'Number of training steps.')
 wandb_config = default_wandb_config()
 wandb_config.update({
     'project': 'd4rl_test',
-    'exp_prefix': 'iql_test',
-    'exp_descriptor': 'iql_{env_name}',
+    'group': 'iql_test',
+    'name': 'iql_{env_name}',
 })
 
 config_flags.DEFINE_config_dict('wandb', wandb_config, lock_config=False)
@@ -56,8 +56,9 @@ def main(_):
     # Create wandb logger
     setup_wandb(FLAGS.config.to_dict(), **FLAGS.wandb)
 
-    FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.config.exp_prefix, wandb.config.experiment_id)
-    os.makedirs(FLAGS.save_dir, exist_ok=True)
+    if FLAGS.save_dir is not None:
+        FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, wandb.config.exp_prefix, wandb.config.experiment_id)
+        os.makedirs(FLAGS.save_dir, exist_ok=True)
     
     env = d4rl_utils.make_env(FLAGS.env_name)
     dataset = d4rl_utils.get_dataset(env)
@@ -90,7 +91,7 @@ def main(_):
             eval_metrics = {f'evaluation/{k}': v for k, v in eval_info.items()}
             wandb.log(eval_metrics, step=i)
 
-        if i % FLAGS.save_interval == 0:
+        if i % FLAGS.save_interval == 0 and FLAGS.save_dir is not None:
             save_dict = dict(
                 agent=flax.serialization.to_state_dict(agent),
                 config=FLAGS.config.to_dict()
