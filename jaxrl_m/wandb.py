@@ -31,6 +31,8 @@ import absl.flags as flags
 import ml_collections
 import datetime
 import wandb
+import time
+import numpy as np
 
 def get_flag_dict():
     flag_dict = {k: getattr(flags.FLAGS, k) for k in flags.FLAGS}
@@ -54,9 +56,10 @@ def default_wandb_config():
     config.exp_descriptor = experiment_name # Run name (deprecated, but kept for backwards compatibility)
 
     config.unique_identifier = '' # Unique identifier for run (will be automatically generated unless provided)
+    config.random_delay = 0 # Random delay for wandb.init (in seconds)
     return config
 
-def setup_wandb(hyperparam_dict, entity=None, project='jaxrl_m', group=None, name=None, unique_identifier='', offline=False, **additional_init_kwargs):
+def setup_wandb(hyperparam_dict, entity=None, project='jaxrl_m', group=None, name=None, unique_identifier='', offline=False, random_delay=0, **additional_init_kwargs):
     """
     Utility for setting up wandb logging (based on Young's simplesac):
 
@@ -68,6 +71,7 @@ def setup_wandb(hyperparam_dict, entity=None, project='jaxrl_m', group=None, nam
         - group: str, Group name for wandb
         - name: str, Experiment name for wandb (formatted with FLAGS & hyperparameter_dict)
         - unique_identifier: str, Unique identifier for wandb (default is timestamp)
+        - random_delay: float, Random delay for wandb.init (in seconds) to avoid collisions
         - additional_init_kwargs: dict, additional kwargs to pass to wandb.init
     Returns:
         - wandb.run
@@ -79,6 +83,8 @@ def setup_wandb(hyperparam_dict, entity=None, project='jaxrl_m', group=None, nam
         additional_init_kwargs.pop('exp_prefix')
 
     if not unique_identifier:
+        if random_delay:
+            time.sleep(np.random.uniform(0, random_delay))
         unique_identifier = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if name is not None:
