@@ -5,38 +5,44 @@ import numpy as np
 from collections import defaultdict
 import time
 
+
 def supply_rng(f, rng=jax.random.PRNGKey(0)):
     """
-        Wrapper that supplies a jax random key to a function (using keyword `seed`).
-        Useful for stochastic policies that require randomness.            
+    Wrapper that supplies a jax random key to a function (using keyword `seed`).
+    Useful for stochastic policies that require randomness.
 
-        Similar to functools.partial(f, seed=seed), but makes sure to use a different
-        key for each new call (to avoid stale rng keys).
+    Similar to functools.partial(f, seed=seed), but makes sure to use a different
+    key for each new call (to avoid stale rng keys).
 
     """
+
     def wrapped(*args, **kwargs):
         nonlocal rng
         rng, key = jax.random.split(rng)
         return f(*args, seed=key, **kwargs)
+
     return wrapped
 
-def flatten(d, parent_key='', sep='.'):
+
+def flatten(d, parent_key="", sep="."):
     """
-    Helper function that flattens a dictionary of dictionaries into a single dictionary. 
+    Helper function that flattens a dictionary of dictionaries into a single dictionary.
     E.g: flatten({'a': {'b': 1}}) -> {'a.b': 1}
     """
     items = []
     for k, v in d.items():
         new_key = parent_key + sep + k if parent_key else k
-        if hasattr(v, 'items'):
+        if hasattr(v, "items"):
             items.extend(flatten(v, new_key, sep=sep).items())
         else:
             items.append((new_key, v))
     return dict(items)
 
+
 def add_to(dict_of_lists, single_dict):
     for k, v in single_dict.items():
         dict_of_lists[k].append(v)
+
 
 def evaluate(policy_fn, env: gym.Env, num_episodes: int) -> Dict[str, float]:
     """
@@ -44,9 +50,9 @@ def evaluate(policy_fn, env: gym.Env, num_episodes: int) -> Dict[str, float]:
     and returns average statistics for metrics in the environment's info dict.
 
     If you wish to log environment returns, you can use the EpisodeMonitor wrapper (see below).
-    
+
     Arguments:
-        policy_fn: A function that takes an observation and returns an action. 
+        policy_fn: A function that takes an observation and returns an action.
             (if your policy needs JAX RNG keys, use supply_rng to supply a random key)
         env: The environment to evaluate in.
         num_episodes: The number of episodes to run for.
@@ -61,14 +67,16 @@ def evaluate(policy_fn, env: gym.Env, num_episodes: int) -> Dict[str, float]:
             action = policy_fn(observation)
             observation, _, done, info = env.step(action)
             add_to(stats, flatten(info))
-        add_to(stats, flatten(info, parent_key='final'))
+        add_to(stats, flatten(info, parent_key="final"))
 
     for k, v in stats.items():
         stats[k] = np.mean(v)
     return stats
 
-def evaluate_with_trajectories(policy_fn, env: gym.Env,
-             num_episodes: int) -> Dict[str, float]:
+
+def evaluate_with_trajectories(
+    policy_fn, env: gym.Env, num_episodes: int
+) -> Dict[str, float]:
     """
     Same as evaluate, but also returns the trajectories of observations, actions, rewards, etc.
 
@@ -96,20 +104,28 @@ def evaluate_with_trajectories(policy_fn, env: gym.Env,
         while not done:
             action = policy_fn(observation)
             next_observation, r, done, info = env.step(action)
-            transition = dict(observation=observation, next_observation=next_observation,
-                action=action, reward=r, done=done, info=info)
-            add_to(trajectory, transition)  
+            transition = dict(
+                observation=observation,
+                next_observation=next_observation,
+                action=action,
+                reward=r,
+                done=done,
+                info=info,
+            )
+            add_to(trajectory, transition)
             add_to(stats, flatten(info))
             observation = next_observation
-        add_to(stats, flatten(info, parent_key='final'))
+        add_to(stats, flatten(info, parent_key="final"))
         trajectories.append(trajectory)
 
     for k, v in stats.items():
         stats[k] = np.mean(v)
     return stats, trajectories
 
+
 class EpisodeMonitor(gym.ActionWrapper):
     """A class that computes episode returns and lengths."""
+
     def __init__(self, env: gym.Env):
         super().__init__(env)
         self._reset_stats()
@@ -126,17 +142,18 @@ class EpisodeMonitor(gym.ActionWrapper):
         self.reward_sum += reward
         self.episode_length += 1
         self.total_timesteps += 1
-        info['total'] = {'timesteps': self.total_timesteps}
+        info["total"] = {"timesteps": self.total_timesteps}
 
         if done:
-            info['episode'] = {}
-            info['episode']['return'] = self.reward_sum
-            info['episode']['length'] = self.episode_length
-            info['episode']['duration'] = time.time() - self.start_time
+            info["episode"] = {}
+            info["episode"]["return"] = self.reward_sum
+            info["episode"]["length"] = self.episode_length
+            info["episode"]["duration"] = time.time() - self.start_time
 
-            if hasattr(self, 'get_normalized_score'):
-                info['episode']['normalized_return'] = self.get_normalized_score(
-                    info['episode']['return']) * 100.0
+            if hasattr(self, "get_normalized_score"):
+                info["episode"]["normalized_return"] = (
+                    self.get_normalized_score(info["episode"]["return"]) * 100.0
+                )
 
         return observation, reward, done, info
 
