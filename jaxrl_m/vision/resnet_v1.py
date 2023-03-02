@@ -1,333 +1,213 @@
-import flax.linen as nn
-import jax.numpy as jnp
-
+"""Flax implementation of ResNet V1. Stolen from tps://github.com/google/flax/blob/master/examples/imagenet/models.py"""
 from functools import partial
 from typing import Any, Callable, Sequence, Tuple
 
-import flax.linen as nn
+from flax import linen as nn
 import jax.numpy as jnp
 
-
-def default_init(scale: float = jnp.sqrt(2)):
-    return nn.initializers.orthogonal(scale)
-
-def xavier_init():
-    return nn.initializers.xavier_normal()
-
-def kaiming_init():
-    return nn.initializers.kaiming_normal()
-
 ModuleDef = Any
 
 
-default_kernel_init = nn.initializers.lecun_normal()
+class ResNetBlock(nn.Module):
+  """ResNet block."""
+  filters: int
+  conv: ModuleDef
+  norm: ModuleDef
+  act: Callable
+  strides: Tuple[int, int] = (1, 1)
+
+  @nn.compact
+  def __call__(self, x,):
+    residual = x
+    y = self.conv(self.filters, (3, 3), self.strides, padding=((1, 1), (1, 1)))(x)
+    y = self.norm()(y)
+    y = self.act(y)
+    y = self.conv(self.filters, (3, 3), padding=((1, 1), (1, 1)))(y)
+    y = self.norm(scale_init=nn.initializers.zeros)(y)
+
+    if residual.shape != y.shape:
+      residual = self.conv(self.filters, (1, 1),
+                           self.strides, name='conv_proj')(residual)
+      residual = self.norm(name='norm_proj')(residual)
+
+    return self.act(residual + y)
 
 
-class SpatialSoftmax(nn.Module):
-    height: int
-    width: int
-    channel: int
-    pos_x: jnp.ndarray
-    pos_y: jnp.ndarray
-    temperature: None
-    log_heatmap: bool = False
+class BottleneckResNetBlock(nn.Module):
+  """Bottleneck ResNet block."""
+  filters: int
+  conv: ModuleDef
+  norm: ModuleDef
+  act: Callable
+  strides: Tuple[int, int] = (1, 1)
 
-    @nn.compact
-    def __call__(self, feature):
-        if self.temperature == -1:
-            from jax.nn import initializers
-            # print("Trainable temperature parameter")
-            temperature = self.param('softmax_temperature', initializers.ones, (1), jnp.float32)
-        else:
-            temperature = 1.
+  @nn.compact
+  def __call__(self, x):
+    residual = x
+    y = self.conv(self.filters, (1, 1))(x)
+    y = self.norm()(y)
+    y = self.act(y)
+    y = self.conv(self.filters, (3, 3), self.strides, padding=((1, 1), (1, 1)))(y)
+    y = self.norm()(y)
+    y = self.act(y)
+    y = self.conv(self.filters * 4, (1, 1))(y)
+    y = self.norm(scale_init=nn.initializers.zeros)(y)
 
-        # print(temperature)
-        assert len(feature.shape) == 4
-        batch_size, num_featuremaps = feature.shape[0], feature.shape[3]
-        feature = feature.transpose(0, 3, 1, 2).reshape(batch_size, num_featuremaps, self.height * self.width)
+    if residual.shape != y.shape:
+      residual = self.conv(self.filters * 4, (1, 1),
+                           self.strides, name='conv_proj')(residual)
+      residual = self.norm(name='norm_proj')(residual)
 
-        softmax_attention = nn.softmax(feature / temperature)
-        expected_x = jnp.sum(self.pos_x * softmax_attention, axis=2, keepdims=True).reshape(batch_size, num_featuremaps)
-        expected_y = jnp.sum(self.pos_y * softmax_attention, axis=2, keepdims=True).reshape(batch_size, num_featuremaps)
-        expected_xy = jnp.concatenate([expected_x, expected_y], axis=1)
-
-        expected_xy = jnp.reshape(expected_xy, [batch_size, 2*num_featuremaps])
-        return expected_xy
+    return self.act(residual + y)
 
 
-class SpatialLearnedEmbeddings(nn.Module):
-    height: int
-    width: int
-    channel: int
-    num_features: int = 5
-    kernel_init: Callable = default_kernel_init
-    param_dtype: Any = jnp.float32
+class ResNet(nn.Module):
+  """ResNetV1."""
+  stage_sizes: Sequence[int]
+  block_cls: ModuleDef
+  num_filters: int = 64
+  dtype: Any = jnp.float32
+  act: Callable = nn.relu
+
+  @nn.compact
+  def __call__(self, x, train: bool = True):
+
+    conv = partial(nn.Conv, use_bias=False, dtype=self.dtype)
+    norm = partial(nn.BatchNorm,
+                   use_running_average=not train,
+                   momentum=0.9,
+                   epsilon=1e-5,
+                   dtype=self.dtype)
+
+    x = conv(self.num_filters, (7, 7), (2, 2),
+             padding=[(3, 3), (3, 3)],
+             name='conv_init')(x)
+    x = norm(name='bn_init')(x)
+    x = nn.relu(x)
+    x = nn.max_pool(x, (3, 3), strides=(2, 2), padding=((1, 1), (1, 1)))
+    for i, block_size in enumerate(self.stage_sizes):
+      for j in range(block_size):
+        strides = (2, 2) if i > 0 and j == 0 else (1, 1)
+        x = self.block_cls(self.num_filters * 2 ** i,
+                           strides=strides,
+                           conv=conv,
+                           norm=norm,
+                           act=self.act)(x)
+    x = jnp.mean(x, axis=(1, 2))
+    # x = nn.Dense(self.num_classes, dtype=self.dtype)(x)
+    # x = jnp.asarray(x, self.dtype)
+    # # x = nn.log_softmax(x)  # to match the Torch implementation at https://github.com/pytorch/vision/blob/master/torchvision/models/resnet.py
+    return x
+
+
+
+# function to translate pytorch param keys to jax:
+def translate_key(pytorch_name, resnet="50"):
+    if resnet == "50":
+      block_name = "BottleneckResNetBlock" 
+      layer_list = [3, 4, 6, 3]
+    elif resnet == "18":
+      block_name = "ResNetBlock"
+      layer_list = [2, 2, 2, 2]
+    else:
+      raise RuntimeError("Choose one of {'18', '50'}.")
+
+    split = pytorch_name.split('.')
     
-    @nn.compact
-    def __call__(self, features):
-        """ 
-        features is B x H x W X C
-        """
-        kernel = self.param('kernel',
-                            self.kernel_init,
-                            (self.height, self.width, self.channel, self.num_features),
-                            self.param_dtype)
-        
-        batch_size = features.shape[0]
-        assert len(features.shape) == 4
-        features = jnp.sum(
-            jnp.expand_dims(features, -1) * jnp.expand_dims(kernel, 0), axis=(1, 2))
-        features = jnp.reshape(features, [batch_size, -1])
-        return features
+    # fc.{weight|bias} -> (params, Dense_0, {kernel|bias})
+    if len(split) == 2 and split[0] == 'fc':
+      return ("params", "Dense_0", "bias" if split[1] == "bias" else "kernel")
 
-class MyGroupNorm(nn.GroupNorm):
+    # layer{i}.{j}.bn{k}.{weight|bias|running_mean|running_var} -> ({params|batch_stats}, BottleneckBlock_{}, BatchNorm_{}, {scale|bias|mean|var})
+    if len(split) == 4 and split[0][:-1] == 'layer' and split[1].isdigit() and split[2][:-1] == 'bn':
+      if split[3] in ['num_batches_tracked']:
+        print(f"NO PATTERN MATCHES: {pytorch_name}")
+        return None
 
-    def __call__(self, x):
-        if x.ndim == 3:
-            x = x[jnp.newaxis]
-            x = super().__call__(x)
-            return x[0]
-        else:
-            return super().__call__(x)
+      return ("params" if split[3] in ["weight", "bias"] else "batch_stats",
+              f"{block_name}_{sum(layer_list[:int(split[0][-1]) - 1]) + int(split[1])}",
+              f"BatchNorm_{int(split[2][-1]) - 1}",
+              "scale" if split[3] == "weight" else split[3][8:] if split[3] in ["running_mean", "running_var"] else "bias")
 
-class ResNetBlock(nn.Module):
-    """ResNet block."""
-    filters: int
-    conv: ModuleDef
-    norm: ModuleDef
-    act: Callable
-    strides: Tuple[int, int] = (1, 1)
+    # layer{i}.{j}.conv{k}.weight -> (params, BottleneckBlock_{}, Conv_{}, kernel)
+    if len(split) == 4 and split[0][:-1] == 'layer' and split[1].isdigit() and split[2][:-1] == 'conv':
+      if split[3] in ['bias']:
+        print(f"NO PATTERN MATCHES: {pytorch_name}")
+        return None
 
-    @nn.compact
-    def __call__(self, x, ):
-        residual = x
-        y = self.conv(self.filters, (3, 3), self.strides)(x)
-        y = self.norm()(y)
-        y = self.act(y)
-        y = self.conv(self.filters, (3, 3))(y)
-        y = self.norm()(y)
+      return ("params",
+              f"{block_name}_{sum(layer_list[:int(split[0][-1]) - 1]) + int(split[1])}",
+              f"Conv_{int(split[2][-1]) - 1}",
+              "kernel")
 
-        if residual.shape != y.shape:
-            residual = self.conv(self.filters, (1, 1),
-                                 self.strides, name='conv_proj')(residual)
-            residual = self.norm(name='norm_proj')(residual)
+    # bn1.{weight|bias|running_mean|running_var} -> ({params|batch_stats}, bn_init, {scale|bias|mean|var})
+    if len(split) == 2 and split[0] == "bn1":
+      if split[1] in ['num_batches_tracked']:
+        print(f"NO PATTERN MATCHES: {pytorch_name}")
+        return None
 
-        return self.act(residual + y)
+      return ("params" if split[1] in ["weight", "bias"] else "batch_stats",
+              "bn_init",
+              "scale" if split[1] == "weight" else split[1][8:] if split[1] in ["running_mean", "running_var"] else "bias")
 
+    # conv1.weight -> (params, conv_init, kernel)
+    if len(split) == 2 and split[0] == "conv1":
+      if split[1] in ['bias']:
+        print(f"NO PATTERN MATCHES: {pytorch_name}")
+        return None
 
-class BottleneckResNetBlock(nn.Module):
-    """Bottleneck ResNet block."""
-    filters: int
-    conv: ModuleDef
-    norm: ModuleDef
-    act: Callable
-    strides: Tuple[int, int] = (1, 1)
+      return ("params", "conv_init", "kernel")
 
-    @nn.compact
-    def __call__(self, x):
-        residual = x
-        y = self.conv(self.filters, (1, 1))(x)
-        y = self.norm()(y)
-        y = self.act(y)
-        y = self.conv(self.filters, (3, 3), self.strides)(y)
-        y = self.norm()(y)
-        y = self.act(y)
-        y = self.conv(self.filters * 4, (1, 1))(y)
-        y = self.norm(scale_init=nn.initializers.zeros)(y)
+    # layer{i}.{j}.downsample.0.weight -> (params, BottleneckBlock_{}, conv_proj, kernel)
+    if len(split) == 5 and split[0][:-1] == 'layer' and split[1].isdigit() and split[2] == 'downsample' and split[3] == '0':
+      if split[4] in ['bias']:
+        print(f"NO PATTERN MATCHES: {pytorch_name}")
+        return None
 
-        if residual.shape != y.shape:
-            residual = self.conv(self.filters * 4, (1, 1),
-                                 self.strides, name='conv_proj')(residual)
-            residual = self.norm(name='norm_proj')(residual)
+      return ("params",
+              f"{block_name}_{sum(layer_list[:int(split[0][-1]) - 1]) + int(split[1])}",
+              "conv_proj",
+              "kernel")
 
-        return self.act(residual + y)
+    # layer{i}.{j}.downsample.1.{weight|bias|running_mean|running_var} -> ({params|batch_stats}, BottleneckBlock_{}, norm_proj, {scale|bias|mean|var})
+    if len(split) == 5 and split[0][:-1] == 'layer' and split[1].isdigit() and split[2] == 'downsample' and split[3] == '1':
+      if split[4] in ['num_batches_tracked']:
+        print(f"NO PATTERN MATCHES: {pytorch_name}")
+        return None
+
+      return ("params" if split[4] in ["weight", "bias"] else "batch_stats",
+              f"{block_name}_{sum(layer_list[:int(split[0][-1]) - 1]) + int(split[1])}",
+              "norm_proj",
+              "scale" if split[4] == "weight" else split[4][8:] if split[4] in ["running_mean", "running_var"] else "bias")
 
 
+    print(f"NO PATTERN MATCHES: {pytorch_name}")
+    return None
+
+def convert_pytorch_to_jax(pytorch_statedict, jax_variables, resnet_type="50"):
+  from flax.traverse_util import flatten_dict, unflatten_dict
+  from flax.core import freeze, unfreeze
 
 
-ModuleDef = Any
+  jax_params = flatten_dict(unfreeze(jax_variables))
+  # create a new dict the same shape as the original jax params dict but filled with the (transposed) pytorch weights
+  jax2pytorch = {translate_key(key, resnet_type): key for key in pytorch_statedict.keys() if translate_key(key) is not None}
+  pytorch_params = {k: v.numpy().T if len(v.shape) != 4 else v.numpy().transpose((2, 3, 1, 0))
+                    for k, v in pytorch_statedict.items()}
+  new_jax_params = freeze(unflatten_dict({key: pytorch_params[jax2pytorch[key]] for key in jax_params.keys()}))
+  return new_jax_params
 
-
-class MyGroupNorm(nn.GroupNorm):
-
-    def __call__(self, x):
-        if x.ndim == 3:
-            x = x[jnp.newaxis]
-            x = super().__call__(x)
-            return x[0]
-        else:
-            return super().__call__(x)
-
-class ResNetBlock(nn.Module):
-    """ResNet block."""
-    filters: int
-    conv: ModuleDef
-    norm: ModuleDef
-    act: Callable
-    strides: Tuple[int, int] = (1, 1)
-
-    @nn.compact
-    def __call__(self, x, ):
-        residual = x
-        y = self.conv(self.filters, (3, 3), self.strides)(x)
-        y = self.norm()(y)
-        y = self.act(y)
-        y = self.conv(self.filters, (3, 3))(y)
-        y = self.norm()(y)
-
-        if residual.shape != y.shape:
-            residual = self.conv(self.filters, (1, 1),
-                                 self.strides, name='conv_proj')(residual)
-            residual = self.norm(name='norm_proj')(residual)
-
-        return self.act(residual + y)
-
-
-class BottleneckResNetBlock(nn.Module):
-    """Bottleneck ResNet block."""
-    filters: int
-    conv: ModuleDef
-    norm: ModuleDef
-    act: Callable
-    strides: Tuple[int, int] = (1, 1)
-
-    @nn.compact
-    def __call__(self, x):
-        residual = x
-        y = self.conv(self.filters, (1, 1))(x)
-        y = self.norm()(y)
-        y = self.act(y)
-        y = self.conv(self.filters, (3, 3), self.strides)(y)
-        y = self.norm()(y)
-        y = self.act(y)
-        y = self.conv(self.filters * 4, (1, 1))(y)
-        y = self.norm(scale_init=nn.initializers.zeros)(y)
-
-        if residual.shape != y.shape:
-            residual = self.conv(self.filters * 4, (1, 1),
-                                 self.strides, name='conv_proj')(residual)
-            residual = self.norm(name='norm_proj')(residual)
-
-        return self.act(residual + y)
-
-
-class ResNetEncoder(nn.Module):
-    """ResNetV1."""
-    stage_sizes: Sequence[int]
-    block_cls: ModuleDef
-    num_filters: int = 64
-    dtype: Any = jnp.float32
-    act: Callable = nn.relu
-    conv: ModuleDef = nn.Conv
-    norm: str = 'batch'
-    use_spatial_softmax: bool = False
-    softmax_temperature: float = 1.0
-    use_multiplicative_cond: bool = False
-    use_spatial_learned_embeddings: bool = False
-    num_spatial_blocks: int = 8
-
-    @nn.compact
-    def __call__(self, observations: jnp.ndarray, train: bool = True,
-                 cond_var=None):
-        
-        x = observations.astype(jnp.float32) / 255.0
-        # x = jnp.reshape(x, (*x.shape[:-2], -1))
-
-        conv = partial(self.conv, use_bias=False, dtype=self.dtype, kernel_init=kaiming_init())
-        if self.norm == 'batch':
-            norm = partial(nn.BatchNorm,
-                           use_running_average=not train,
-                           momentum=0.9,
-                           epsilon=1e-5,
-                           dtype=self.dtype)
-        elif self.norm == 'group':
-            norm = partial(MyGroupNorm,
-                           num_groups=4,
-                           epsilon=1e-5,
-                           dtype=self.dtype)
-        elif self.norm == 'cross':
-            raise NotImplementedError()
-            norm = partial(CrossNorm,
-                           use_running_average=not train,
-                           momentum=0.9,
-                           epsilon=1e-5,
-                           dtype=self.dtype)
-        elif self.norm == 'layer':
-            norm = partial(nn.LayerNorm, 
-                epsilon=1e-5,
-                dtype=self.dtype,
-            )
-        else:
-            raise ValueError('norm not found')
-
-        print('input ', x.shape)
-        strides = (2, 2, 2, 1, 1)
-        x = conv(self.num_filters, (7, 7), (strides[0], strides[0]),
-                 padding=[(3, 3), (3, 3)],
-                 name='conv_init')(x)
-        print('post conv1', x.shape)
-
-        x = norm(name='bn_init')(x)
-        x = nn.relu(x)
-        x = nn.max_pool(x, (3, 3), strides=(strides[1], strides[1]), padding='SAME')
-        print('post maxpool1', x.shape)
-        for i, block_size in enumerate(self.stage_sizes):
-            for j in range(block_size):
-                stride = (strides[i + 1], strides[i + 1]) if i > 0 and j == 0 else (1, 1)
-                x = self.block_cls(self.num_filters * 2 ** i,
-                                   strides=stride,
-                                   conv=conv,
-                                   norm=norm,
-                                   act=self.act)(x)
-                print('post block layer ', x.shape)
-                if self.use_multiplicative_cond:
-                    assert cond_var is not None, "Cond var is None, nothing to condition on"
-                    print("Using Multiplicative Cond!")
-                    cond_out = nn.Dense(x.shape[-1], kernel_init=xavier_init())(cond_var)
-                    x_mult = jnp.expand_dims(jnp.expand_dims(cond_out, 1), 1)
-                    print ('x_mult shape:', x_mult.shape)
-                    x = x * x_mult
-            print('post block ', x.shape)
-            
-
-        if self.use_spatial_learned_embeddings:
-            height, width, channel = x.shape[len(x.shape) - 3:]
-            print('pre spatial learned embeddings', x.shape)
-            x = SpatialLearnedEmbeddings(
-                height=height, width=width, channel=channel,
-                num_features=self.num_spatial_blocks
-            )(x)
-            print('post spatial learned embeddings', x.shape)
-        elif self.use_spatial_softmax:
-            height, width, channel = x.shape[len(x.shape) - 3:]
-            pos_x, pos_y = jnp.meshgrid(
-                jnp.linspace(-1., 1., height),
-                jnp.linspace(-1., 1., width)
-            )
-            pos_x = pos_x.reshape(height * width)
-            pos_y = pos_y.reshape(height * width)
-            print('pre spatial softmax', x.shape)
-            x = SpatialSoftmax(height, width, channel, pos_x, pos_y, self.softmax_temperature)(x)
-            print('post spatial softmax', x.shape)
-        else:
-            x = jnp.mean(x, axis=(len(x.shape) - 3,len(x.shape) - 2))
-            print('post flatten', x.shape)
-        return x
-
-import functools as ft
-resnetv1_configs = {
-  'resnetv1-18': ft.partial(ResNetEncoder, stage_sizes=(2, 2, 2, 2),
+vanilla_resnetv1_configs = {
+    'resnetv1-18': partial(ResNet, stage_sizes=[2, 2, 2, 2],
                    block_cls=ResNetBlock),
-  'resnetv1-34': ft.partial(ResNetEncoder, stage_sizes=(3, 4, 6, 3),
+    'resnetv1-34': partial(ResNet, stage_sizes=[3, 4, 6, 3],
                    block_cls=ResNetBlock),
-  'resnetv1-50': ft.partial(ResNetEncoder, stage_sizes=[3, 4, 6, 3],
+    'resnetv1-50': partial(ResNet, stage_sizes=[3, 4, 6, 3],
                    block_cls=BottleneckResNetBlock),
-  'resnetv1-18-deeper': ft.partial(ResNetEncoder, stage_sizes=(3, 3, 3, 3),
-                   block_cls=ResNetBlock),
-  'resnetv1-18-deepest': ft.partial(ResNetEncoder, stage_sizes=(4, 4, 4, 4),
-                   block_cls=ResNetBlock),
-  'resnetv1-18-bridge': ft.partial(ResNetEncoder, stage_sizes=(2, 2, 2, 2),
-                   block_cls=ResNetBlock, use_spatial_learned_embeddings=True, num_spatial_blocks=8),
-  'resnetv1-34-bridge': ft.partial(ResNetEncoder, stage_sizes=(3, 4, 6, 3),
-                   block_cls=ResNetBlock, use_spatial_learned_embeddings=True, num_spatial_blocks=8),
+    'resnetv1-101': partial(ResNet, stage_sizes=[3, 4, 23, 3],
+                    block_cls=BottleneckResNetBlock),
+    'resnetv1-152': partial(ResNet, stage_sizes=[3, 8, 36, 3],
+                    block_cls=BottleneckResNetBlock),
+    'resnetv1-200': partial(ResNet, stage_sizes=[3, 24, 36, 3],
+                    block_cls=BottleneckResNetBlock)
 }

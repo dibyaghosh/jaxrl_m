@@ -12,7 +12,6 @@ This file contains nn.Module definitions for common networks used in RL. It is d
     ActorCritic: Same as WithEncoder, but for possibly many different networks (e.g. actor, critic, value)
 """
 
-import collections
 from jaxrl_m.typing import *
 
 import flax.linen as nn

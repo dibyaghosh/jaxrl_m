@@ -38,7 +38,7 @@ class TrainState(flax.struct.PyTreeNode):
     Creation:
     ```
         model_def = nn.Dense(12) # or any other flax.linen Module
-        params = model_def.init(jax.random.PRNGKey(0), jnp.ones((1, 4)))['params']
+        _, params = model_def.init(jax.random.PRNGKey(0), jnp.ones((1, 4))).pop('params')
         model = TrainState.create(model_def, params, tx=None) # Optionally, pass in an optax optimizer
     ```
 
@@ -64,6 +64,7 @@ class TrainState(flax.struct.PyTreeNode):
     apply_fn: Callable[..., Any] = nonpytree_field()
     model_def: Any = nonpytree_field()
     params: Params
+    extra_variables: Optional[Params] # Use this to store additional variables that are not being optimized
     tx: Optional[optax.GradientTransformation] = nonpytree_field()
     opt_state: Optional[optax.OptState] = None
 
@@ -73,6 +74,7 @@ class TrainState(flax.struct.PyTreeNode):
         model_def: nn.Module,
         params: Params,
         tx: Optional[optax.GradientTransformation] = None,
+        extra_variables: Optional[dict] = None,
         **kwargs,
     ) -> "TrainState":
         if tx is not None:
@@ -80,11 +82,15 @@ class TrainState(flax.struct.PyTreeNode):
         else:
             opt_state = None
 
+        if extra_variables is None:
+            extra_variables = flax.core.FrozenDict()
+
         return cls(
             step=1,
             apply_fn=model_def.apply,
             model_def=model_def,
             params=params,
+            extra_variables=extra_variables,
             tx=tx,
             opt_state=opt_state,
             **kwargs,
@@ -93,7 +99,7 @@ class TrainState(flax.struct.PyTreeNode):
     def __call__(
         self,
         *args,
-        params=None,
+        params: Params =None,
         extra_variables: dict = None,
         method: ModuleMethod = None,
         **kwargs,
@@ -103,7 +109,7 @@ class TrainState(flax.struct.PyTreeNode):
 
         Arguments:
             params: If not None, use these params instead of the ones stored in the model.
-            extra_variables: Additional variables to pass into apply_fn
+            extra_variables: Additional variables to pass into apply_fn (overrides model.extra_variables if they exist)
             method: If None, use the `__call__` method of the model_def. If a string, uses
                 the method of the model_def with that name (e.g. 'encode' -> model_def.encode).
                 If a function, uses that function.
@@ -112,10 +118,9 @@ class TrainState(flax.struct.PyTreeNode):
         if params is None:
             params = self.params
 
-        variables = {"params": params}
-
-        if extra_variables is not None:
-            variables = {**variables, **extra_variables}
+        if extra_variables is None:
+            extra_variables = self.extra_variables
+        variables = {"params": params, **self.extra_variables}
 
         if isinstance(method, str):
             method = getattr(self.model_def, method)
