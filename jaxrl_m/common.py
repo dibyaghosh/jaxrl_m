@@ -170,3 +170,15 @@ class TrainState(flax.struct.PyTreeNode):
             if pmap_axis is not None:
                 grads = jax.lax.pmean(grads, axis_name=pmap_axis)
             return self.apply_gradients(grads=grads)
+    
+    def __getattr__(self, name):
+        """
+            Syntax sugar for calling methods of the model_def directly.
+
+            Example:
+            ```
+                model(x, method='encode')
+                model.encode(x) # Same as last
+        """
+        method = getattr(self.model_def, name)
+        return functools.partial(self.__call__, method=method)

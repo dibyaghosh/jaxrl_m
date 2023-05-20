@@ -91,10 +91,11 @@ def ensemblize(cls, num_qs, out_axes=0, **kwargs):
         critic_def = ensemblize(Critic, 2)(hidden_dims=hidden_dims)
 
     """
+    split_rngs = kwargs.pop("split_rngs", {})
     return nn.vmap(
         cls,
         variable_axes={"params": 0},
-        split_rngs={"params": True},
+        split_rngs={**split_rngs, "params": True},
         in_axes=None,
         out_axes=out_axes,
         axis_size=num_qs,
