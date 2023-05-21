@@ -68,6 +68,7 @@ class ResNet(nn.Module):
   num_filters: int = 64
   dtype: Any = jnp.float32
   act: Callable = nn.relu
+  output_fc_dim: int = None
 
   @nn.compact
   def __call__(self, x, train: bool = True):
@@ -94,6 +95,9 @@ class ResNet(nn.Module):
                            norm=norm,
                            act=self.act)(x)
     x = jnp.mean(x, axis=(1, 2))
+    if self.output_fc_dim is not None:
+      x = nn.Dense(self.output_fc_dim, dtype=self.dtype)(x)
+
     # x = nn.Dense(self.num_classes, dtype=self.dtype)(x)
     # x = jnp.asarray(x, self.dtype)
     # # x = nn.log_softmax(x)  # to match the Torch implementation at https://github.com/pytorch/vision/blob/master/torchvision/models/resnet.py
@@ -211,3 +215,5 @@ vanilla_resnetv1_configs = {
     'resnetv1-200': partial(ResNet, stage_sizes=[3, 24, 36, 3],
                     block_cls=BottleneckResNetBlock)
 }
+
+vanilla_resnetv1_configs['vip'] = partial(vanilla_resnetv1_configs['resnetv1-50'], output_fc_dim=1024)
