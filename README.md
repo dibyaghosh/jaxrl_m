@@ -1,5 +1,7 @@
 # A JAX Backbone for RL projects
 
+[![DOI](https://zenodo.org/badge/552666099.svg)](https://zenodo.org/badge/latestdoi/552666099)
+
 This project serves as a "central backbone" for an RL codebase, designed to accelerate prototyping and diagnosis of **new** algorithms (although it auxiliarily does contain reference implementations of SAC, CQL, IQL, BC). It borrows greatly from Ilya Kostrikov's  [JaxRL](https://github.com/ikostrikov/jaxrl) codebase. 
 
 The primary goal of the codebase is to make ease of coding up a new algorithm: towards this goal, the primary philosophy is that 
@@ -7,6 +9,7 @@ The primary goal of the codebase is to make ease of coding up a new algorithm: t
 > algorithms should be single-file implementations
 
 This means that (almost) all components of the algorithm (from update rule to network choices to hyperparameter choices) are all contained in one file (e.g. see [BC example](examples/vision_agents/continuous_bc.py) or [SAC example](examples/mujoco/sac.py)). This makes it easy to read and understand the algorithm, and also makes it easy to modify the algorithm to test out new ideas. The code is also designed to scale as easily as possible to multi-GPU / TPU setups, with simple abstractions for distributed training.
+
 
 ## Installation
 
@@ -47,3 +50,21 @@ Example Launchers:
 
 1. [Mujoco SAC](examples/mujoco/run_mujoco_sac.py)
 2. [D4RL IQL](examples/mujoco/run_d4rl_iql.py)
+
+
+### Citation
+
+If you use this codebase in an academic work, please cite
+
+```
+@software{jaxrl_minimal,
+  author       = {Dibya Ghosh},
+  title        = {dibyaghosh/jaxrl\_m},
+  month        = April,
+  year         = 2023,
+  publisher    = {Zenodo},
+  version      = {v0.1},
+  doi          = {10.5281/zenodo.7958265},
+  url          = {https://github.com/dibyaghosh/jaxrl_m}
+}
+```
