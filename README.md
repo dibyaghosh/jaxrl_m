@@ -2,7 +2,7 @@
 
 [![DOI](https://zenodo.org/badge/552666099.svg)](https://zenodo.org/badge/latestdoi/552666099)
 
-This project serves as a "central backbone" for an RL codebase, designed to accelerate prototyping and diagnosis of **new** algorithms (although it auxiliarily does contain reference implementations of SAC, CQL, IQL, BC). It borrows greatly from Ilya Kostrikov's  [JaxRL](https://github.com/ikostrikov/jaxrl) codebase. 
+This project serves as a "central backbone" for an RL codebase, designed to accelerate prototyping and diagnosis of **new** algorithms (although it auxiliarily does contain reference implementations of SAC, CQL, IQL, BC). It is inspired greatly by Ilya Kostrikov's  [JaxRL](https://github.com/ikostrikov/jaxrl) codebase. 
 
 The primary goal of the codebase is to make ease of coding up a new algorithm: towards this goal, the primary philosophy is that 
 
