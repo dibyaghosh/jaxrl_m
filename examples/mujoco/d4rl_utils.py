@@ -19,23 +19,18 @@ def get_dataset(env: gym.Env,
             lim = 1 - eps
             dataset['actions'] = np.clip(dataset['actions'], -lim, lim)
 
-        dones_float = np.zeros_like(dataset['rewards'])
-
-        for i in range(len(dones_float) - 1):
-            if np.linalg.norm(dataset['observations'][i + 1] -
-                              dataset['next_observations'][i]
-                              ) > 1e-6 or dataset['terminals'][i] == 1.0:
-                dones_float[i] = 1
-            else:
-                dones_float[i] = 0
-
+        imputed_next_observations = np.roll(dataset['observations'], -1, axis=0)
+        same_obs = np.all(np.isclose(imputed_next_observations, dataset['next_observations'], atol=1e-5), axis=-1)
+        dones_float = 1.0 - same_obs.astype(np.float32)
         dones_float[-1] = 1
-
-        return Dataset.create(observations=dataset['observations'].astype(np.float32),
-                         actions=dataset['actions'].astype(np.float32),
-                         rewards=dataset['rewards'].astype(np.float32),
-                         masks=1.0 - dataset['terminals'].astype(np.float32),
-                         dones_float=dones_float.astype(np.float32),
-                         next_observations=dataset['next_observations'].astype(
-                             np.float32),
-                         )
+        
+        dataset = {
+            'observations': dataset['observations'],
+            'actions': dataset['actions'],
+            'rewards': dataset['rewards'],
+            'masks': 1.0 - dataset['terminals'],
+            'dones_float': dones_float,
+            'next_observations': dataset['next_observations'],
+        }
+        dataset = {k: v.astype(np.float32) for k, v in dataset.items()}
+        return Dataset(dataset)

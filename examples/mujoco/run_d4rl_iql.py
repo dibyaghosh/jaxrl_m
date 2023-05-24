@@ -2,19 +2,18 @@ import os
 from absl import app, flags
 from functools import partial
 import numpy as np
-import jax
-import flax
 
 import tqdm
 import iql as learner
 import d4rl_utils
 
-from jaxrl_m.wandb import setup_wandb, default_wandb_config
+from jaxrl_m.wandb import setup_wandb, default_wandb_config, get_flag_dict
 import wandb
 from jaxrl_m.evaluation import supply_rng, evaluate
 
 from ml_collections import config_flags
 import pickle
+from flax.training import checkpoints
 
 
 FLAGS = flags.FLAGS
@@ -59,6 +58,9 @@ def main(_):
     if FLAGS.save_dir is not None:
         FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, wandb.config.exp_prefix, wandb.config.experiment_id)
         os.makedirs(FLAGS.save_dir, exist_ok=True)
+        print(f'Saving config to {FLAGS.save_dir}/config.pkl')
+        with open(os.path.join(FLAGS.save_dir, 'config.pkl'), 'wb') as f:
+            pickle.dump(get_flag_dict(), f)
     
     env = d4rl_utils.make_env(FLAGS.env_name)
     dataset = d4rl_utils.get_dataset(env)
@@ -92,15 +94,7 @@ def main(_):
             wandb.log(eval_metrics, step=i)
 
         if i % FLAGS.save_interval == 0 and FLAGS.save_dir is not None:
-            save_dict = dict(
-                agent=flax.serialization.to_state_dict(agent),
-                config=FLAGS.config.to_dict()
-            )
-
-            fname = os.path.join(FLAGS.save_dir, f'params.pkl')
-            print(f'Saving to {fname}')
-            with open(fname, "wb") as f:
-                pickle.dump(save_dict, f)
+            checkpoints.save_checkpoint(FLAGS.save_dir, agent, i)
 
 if __name__ == '__main__':
     app.run(main)

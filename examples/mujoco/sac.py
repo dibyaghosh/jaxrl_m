@@ -11,7 +11,6 @@ from jaxrl_m.networks import Policy, Critic, ensemblize
 
 import flax
 import flax.linen as nn
-import ml_collections
 
 class Temperature(nn.Module):
     initial_temperature: float = 1.0
@@ -146,6 +145,8 @@ def create_learner(
         return SACAgent(rng, critic=critic, target_critic=target_critic, actor=actor, temp=temp, config=config)
 
 def get_default_config():
+    import ml_collections
+
     return ml_collections.ConfigDict({
         'actor_lr': 3e-4,
         'critic_lr': 3e-4,

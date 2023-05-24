@@ -1,5 +1,4 @@
 """Implementations of algorithms for continuous control."""
-import functools
 from jaxrl_m.typing import *
 
 import jax
@@ -10,7 +9,6 @@ from jaxrl_m.common import TrainState, target_update
 from jaxrl_m.networks import Policy, ValueCritic, Critic, ensemblize
 
 import flax
-import ml_collections
 
 def expectile_loss(diff, expectile=0.8):
     weight = jnp.where(diff > 0, expectile, (1 - expectile))
@@ -130,20 +128,17 @@ def create_learner(
         return IQLAgent(rng, critic=critic, target_critic=target_critic, value=value, actor=actor, config=config)
 
 def get_default_config():
-    config = ml_collections.ConfigDict()
+    import ml_collections
 
-    config.actor_lr = 3e-4
-    config.value_lr = 3e-4
-    config.critic_lr = 3e-4
-
-    config.hidden_dims = (256, 256)
-
-    config.discount = 0.99
-
-    config.expectile = 0.7  # The actual tau for expectiles.
-    config.temperature = 3.0
-    config.dropout_rate = None
-
-    config.tau = 0.005  # For soft target updates.
-
+    config = ml_collections.ConfigDict({
+        'actor_lr': 3e-4,
+        'value_lr': 3e-4,
+        'critic_lr': 3e-4,
+        'hidden_dims': (256, 256),
+        'discount': 0.99,
+        'expectile': 0.7,
+        'temperature': 3.0,
+        'dropout_rate': ml_collections.config_dict.placeholder(float),
+        'tau': 0.005,
+    })
     return config
