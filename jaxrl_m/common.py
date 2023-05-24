@@ -2,25 +2,10 @@ from jaxrl_m.typing import *
 import flax
 import flax.linen as nn
 import jax
-import jax.numpy as jnp
-from jax import tree_util
 import optax
 import functools
 
 nonpytree_field = functools.partial(flax.struct.field, pytree_node=False)
-
-
-def shard_batch(batch):
-    d = jax.local_device_count()
-
-    def reshape(x):
-        assert (
-            x.shape[0] % d == 0
-        ), f"Batch size needs to be divisible by # devices, got {x.shape[0]} and {d}"
-        return x.reshape((d, x.shape[0] // d, *x.shape[1:]))
-
-    return tree_util.tree_map(reshape, batch)
-
 
 def target_update(
     model: "TrainState", target_model: "TrainState", tau: float
@@ -33,7 +18,7 @@ def target_update(
 
 class TrainState(flax.struct.PyTreeNode):
     """
-    Core abstraction of a model in this repository.
+    Core abstraction of a model in this repository. Fully backward compatible with standard flax.training.TrainState.
 
     Creation:
     ```
