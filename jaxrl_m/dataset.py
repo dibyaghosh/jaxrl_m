@@ -1,5 +1,5 @@
 import numpy as np
-from jaxrl_m.typing import Data, Array
+from jaxrl_m.typing import Data
 from flax.core.frozen_dict import FrozenDict
 from jax import tree_util
 
@@ -23,35 +23,11 @@ class Dataset(FrozenDict):
         })
 
         batch = dataset.sample(32)
-        # Batch should have nested shape: {
+        # Batch will have nested shape: {
         # 'observations': {'image': (32, 28, 28, 1), 'state': (32, 4)},
         # 'actions': (32, 2)
         # }
     """
-
-    @classmethod
-    def create(
-        cls,
-        observations: Data,
-        actions: Array,
-        rewards: Array,
-        masks: Array,
-        next_observations: Data,
-        freeze=True,
-        **extra_fields
-    ):
-        data = {
-            "observations": observations,
-            "actions": actions,
-            "rewards": rewards,
-            "masks": masks,
-            "next_observations": next_observations,
-            **extra_fields,
-        }
-        # Force freeze
-        if freeze:
-            tree_util.tree_map(lambda arr: arr.setflags(write=False), data)
-        return cls(data)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
