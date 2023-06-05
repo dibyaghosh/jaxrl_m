@@ -347,7 +347,6 @@ class Transformer(nn.Module):
                 self.drop_path,
                 name=f'blocks_{n}'
             )(x, deterministic, padding_mask)
-            print(x[0, 0, :5])
 
         x = LayerNorm(name='norm')(x)
         return x
@@ -367,7 +366,7 @@ class MaskedAutoencoder(nn.Module):
     drop_path: float = 0.0
 
     image_mask_ratio: float = 0.75
-    use_type_embedding: bool = True
+    use_type_embedding: bool = False
     image_output_dim: int = 768
 
     # @staticmethod
@@ -492,7 +491,6 @@ class MaskedAutoencoder(nn.Module):
         batch_size = image.shape[0]
         # image_x = self.image_embedding(image)
         image_x = self.patch_embed(image)
-        print(image_x.shape)
         image_x = (
             image_x
             + get_2d_sincos_pos_embed(self.emb_dim, image_x.shape[1])
@@ -509,7 +507,6 @@ class MaskedAutoencoder(nn.Module):
         batch_size = image.shape[0]
         # image_x = self.image_embedding(image)
         image_x = self.patch_embed(image)
-        print(image_x.shape)
         image_keep_length = int(image_x.shape[1] * (1.0 - self.image_mask_ratio))
 
         image_x = (
@@ -591,6 +588,40 @@ class LinearCLS(nn.Module):
         logits = nn.Dense(self.num_classes)(x)
         return logits
 
+class ViTRepresentation(MaskedAutoencoder):
+    def setup(self):
+        self.patch_embed = PatchEmbed(embed_dim=self.emb_dim)
+        # self.image_embedding = nn.Dense(
+        #     self.emb_dim,
+        #     kernel_init=nn.initializers.xavier_uniform()
+        # )
+        # Type embeddings
+        if self.use_type_embedding:
+            self.encoder_image_type_embedding = self.param(
+                "encoder_image_type_embedding",
+                nn.initializers.normal(stddev=0.02, dtype=jnp.float32),
+                (1, 1, self.emb_dim),
+            )
+
+        # CLS and masks
+        self.cls_token = self.param(
+            "cls_token",
+            nn.initializers.normal(stddev=0.02, dtype=jnp.float32),
+            (1, 1, self.emb_dim),
+        )
+
+        self.encoder = Transformer(
+            emb_dim=self.emb_dim,
+            depth=self.depth,
+            att_drop=self.att_drop,
+            drop=self.drop,
+            drop_path=self.drop_path,
+            num_heads=self.num_heads,
+            mlp_ratio=self.mlp_ratio,
+        )
+
+    def __call__(self, image, train=True):
+        return self.forward_representation(image, not train)[:, 0]
 
 class ViTClassifier(nn.Module):
     base_model: nn.Module
@@ -721,6 +752,14 @@ transformer_config_dicts = {
 }
 
 mae_model_configs = {
+    **{
     f'mae_{size}': partial(MaskedAutoencoder, **config)
     for size, config in transformer_config_dicts.items() 
+    },
+    **{
+    f'maerep_{size}': partial(ViTRepresentation, **config)
+    for size, config in transformer_config_dicts.items() 
+    },
 }
+
+

@@ -9,6 +9,7 @@ from flax.core import freeze, unfreeze
 import pickle
 import flax.training.checkpoints as checkpoints
 from flax.traverse_util import flatten_dict, unflatten_dict
+import flax
 
 def preprocess_observations(obs,
                             normalize_imagenet=False,
@@ -65,42 +66,50 @@ class ResizingEncoder(nn.Module):
             output = jnp.squeeze(output, 0)
         return output
 
-def merge_dicts(new_dict, restore_from, allow_extra=True, allow_missing=True):
-    new_dict_flat = flatten_dict(new_dict)
+def merge_dicts(new_dict, restore_from, allow_extra=True, allow_missing=True, prefix=tuple()):
+    new_dict_flat_full = flatten_dict(new_dict)
     restore_from_flat = flatten_dict(restore_from)
+
+    new_dict_flat = {
+        k[len(prefix):]: v
+        for k, v in new_dict_flat_full.items()
+        if k[:len(prefix)] == prefix
+    }
     
     missing_from_new = set(restore_from_flat.keys()) - set(new_dict_flat.keys())
     missing_from_restore = set(new_dict_flat.keys()) - set(restore_from_flat.keys())
+
     if not allow_extra:
         assert len(missing_from_new) == 0, 'Keys missing from new dict: %s' % str(missing_from_new)
     elif len(missing_from_new) > 0:
-        print('Keys missing from target dict: %s' % str(missing_from_new))
+        missing_from_new = unflatten_dict({k: None for k in missing_from_new})
+        print('Keys missing from target dict: ')
+        print(flax.core.frozen_dict.pretty_repr(missing_from_new))
     
     if not allow_missing:
         assert len(missing_from_restore) == 0, 'Keys missing from restore dict: %s' % str(missing_from_restore)
     elif len(missing_from_restore) > 0:
-        print('Keys missing from restore dict: %s' % str(missing_from_restore))
+        missing_from_restore = unflatten_dict({k: None for k in missing_from_restore})
+        print('Keys missing from restore dict:')
+        print(flax.core.frozen_dict.pretty_repr(missing_from_restore))
     
-    new_dict_flat.update(restore_from_flat)
-    return unflatten_dict(new_dict_flat)
+
+    new_dict_flat.update({k: v for k, v in restore_from_flat.items() if k in new_dict_flat})
+    new_dict_flat_full.update({prefix + k: v for k, v in new_dict_flat.items()})
+
+    return unflatten_dict(new_dict_flat_full)
 
 def load_pretrained_params(pretrained_params, pretrained_extra_variables, params, extra_variables, prefix_key='encoder/encoder'):
     params, extra_variables = unfreeze(params), unfreeze(extra_variables)
+    prefix_tuple = tuple(prefix_key.split('/')) if prefix_key != '' else tuple()
+    params = merge_dicts(params, pretrained_params, True, True, prefix_tuple) # Just checking
 
-    sp = params
-    prefix_list = prefix_key.split('/') if prefix_key != '' else []
-    for k in prefix_list:
-        sp = sp[k]
-    assert sp.keys() == pretrained_params.keys(), (sp.keys(), pretrained_params.keys())
-    merge_dicts(sp, pretrained_params, True, True) # Just checking
-    sp.update(pretrained_params)
 
     for k in pretrained_extra_variables:
-        sp = extra_variables[k]
-        for kk in prefix_list:
-            sp = sp[kk]
-        assert sp.keys() == pretrained_extra_variables[k].keys(), (sp.keys(), pretrained_extra_variables[k].keys())
-        sp.update(pretrained_extra_variables[k])
+        extra_variables[k] = merge_dicts(
+            extra_variables[k],
+            pretrained_extra_variables[k],
+            True, True, prefix_tuple)
 
     return freeze(params), freeze(extra_variables)
 

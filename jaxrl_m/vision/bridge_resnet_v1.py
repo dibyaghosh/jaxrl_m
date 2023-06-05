@@ -259,7 +259,7 @@ class ResNetEncoder(nn.Module):
             )
         else:
             raise ValueError('norm not found')
-
+        print('norm', norm)
         print('input ', x.shape)
         strides = (2, 2, 2, 1, 1)
         x = conv(self.num_filters, (7, 7), (strides[0], strides[0]),
@@ -316,18 +316,8 @@ class ResNetEncoder(nn.Module):
 
 import functools as ft
 bridge_resnetv1_configs = {
-#   'resnetv1-18': ft.partial(ResNetEncoder, stage_sizes=(2, 2, 2, 2),
-#                    block_cls=ResNetBlock),
-#   'resnetv1-34': ft.partial(ResNetEncoder, stage_sizes=(3, 4, 6, 3),
-#                    block_cls=ResNetBlock),
-#   'resnetv1-50': ft.partial(ResNetEncoder, stage_sizes=[3, 4, 6, 3],
-#                    block_cls=BottleneckResNetBlock),
-#   'resnetv1-18-deeper': ft.partial(ResNetEncoder, stage_sizes=(3, 3, 3, 3),
-#                    block_cls=ResNetBlock),
-#   'resnetv1-18-deepest': ft.partial(ResNetEncoder, stage_sizes=(4, 4, 4, 4),
-#                    block_cls=ResNetBlock),
   'resnetv1-18-bridge': ft.partial(ResNetEncoder, stage_sizes=(2, 2, 2, 2),
-                   block_cls=ResNetBlock, use_spatial_learned_embeddings=True, num_spatial_blocks=8),
+                   block_cls=ResNetBlock, use_spatial_learned_embeddings=True, num_spatial_blocks=8, norm='group'),
   'resnetv1-34-bridge': ft.partial(ResNetEncoder, stage_sizes=(3, 4, 6, 3),
-                   block_cls=ResNetBlock, use_spatial_learned_embeddings=True, num_spatial_blocks=8),
+                   block_cls=ResNetBlock, use_spatial_learned_embeddings=True, num_spatial_blocks=8, norm='group'),
 }
