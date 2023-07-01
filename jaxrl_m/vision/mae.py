@@ -9,75 +9,7 @@ import jax.numpy as jnp
 
 from functools import partial
 
-LayerNorm = partial(nn.LayerNorm, epsilon=1e-5)
-
-def mask_union(mask1, mask2):
-    return jnp.logical_or(mask1 > 0, mask2 > 0).astype(jnp.float32)
-
-
-def mask_intersection(mask1, mask2):
-    return jnp.logical_and(mask1 > 0, mask2 > 0).astype(jnp.float32)
-
-
-def mask_not(mask):
-    return 1.0 - mask
-
-
-def mask_select(mask, this, other=None):
-    if other is None:
-        other = jnp.array(0, dtype=this.dtype)
-    if len(this.shape) == 3:
-        mask = jnp.expand_dims(mask, axis=-1)
-    return jnp.where(mask == 0.0, this, other)
-
-
-def no_mask(x):
-    return jnp.zeros(x.shape[:2])
-
-
-def all_mask(x):
-    return jnp.ones(x.shape[:2])
-
-
-def cross_entropy_loss_and_accuracy(logits, tokens, valid=None):
-    if valid is None:
-        valid = all_mask(tokens)
-    valid_text_length = jnp.maximum(jnp.sum(valid, axis=-1), 1e-5)
-
-    token_log_prob = jnp.squeeze(
-        jnp.take_along_axis(
-            jax.nn.log_softmax(logits, axis=-1),
-            jnp.expand_dims(tokens, -1),
-            axis=-1,
-        ),
-        -1,
-    )
-    token_log_prob = jnp.where(valid > 0.0, token_log_prob, jnp.array(0.0))
-    loss = -jnp.mean(jnp.sum(token_log_prob, axis=-1) / valid_text_length)
-    correct = jnp.where(
-        valid > 0.0,
-        jnp.argmax(logits, axis=-1) == tokens,
-        jnp.array(False)
-    )
-    accuracy = jnp.mean(jnp.sum(correct, axis=-1) / valid_text_length)
-    return loss, accuracy
-
-
-def patch_mse_loss(patch_output, patch_target, valid=None):
-    if valid is None:
-        valid = all_mask(patch_target)
-    valid_ratio = jnp.sum(valid, axis=-1) / valid.shape[-1]
-    return jnp.mean(
-        jnp.mean(
-            jnp.where(
-                valid > 0.0,
-                jnp.mean(jnp.square(patch_target - patch_output), axis=-1),
-                jnp.array(0.0),
-            ),
-            axis=-1,
-        ) / valid_ratio
-    )
-
+LayerNorm = partial(nn.LayerNorm, epsilon=1e-6)
 
 def extract_patches(inputs, patch_size):
     batch, height, width, channels = inputs.shape
@@ -86,16 +18,6 @@ def extract_patches(inputs, patch_size):
     x = jnp.swapaxes(x, 2, 3)
     x = jnp.reshape(x, (batch, height * width, patch_size**2 * channels))
     return x
-
-
-def merge_patches(inputs, patch_size):
-    batch, length, _ = inputs.shape
-    height = width = int(length**0.5)
-    x = jnp.reshape(inputs, (batch, height, width, patch_size, patch_size, -1))
-    x = jnp.swapaxes(x, 2, 3)
-    x = jnp.reshape(x, (batch, height * patch_size, width * patch_size, -1))
-    return x
-
 
 def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     assert embed_dim % 2 == 0
@@ -139,8 +61,16 @@ def get_2d_sincos_pos_embed(embed_dim, length):
     grid = jnp.stack(grid, axis=0)
     grid = grid.reshape([2, 1, grid_size, grid_size])
     pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
+    
     return jnp.expand_dims(pos_embed, 0)
 
+def get_fixed_pos_embed(embed_dim, length):
+    pos_embed_nocls = get_1d_sincos_pos_embed(embed_dim, length - 1)
+    pos_embed = jnp.concatenate([
+        jnp.zeros([1, 1, embed_dim], dtype=jnp.float32),
+        pos_embed_nocls
+    ], axis=1)
+    return pos_embed
 
 def index_sequence(x, ids):
     return x[:, ids, ...]
@@ -162,7 +92,6 @@ def random_masking(x, rng, keep_len, padding_mask=None):
     padding_mask_kept = index_sequence(padding_mask, ids_shuffle[:keep_len])
     return kept, mask, ids_restore, padding_mask_kept
 
-from typing import Tuple
 class PatchEmbed(nn.Module):
     patch_size: int = 16
     in_chans: int = 3
@@ -196,7 +125,7 @@ class MLP(nn.Module):
 
         for i in range(self.depth):
             y = nn.Dense(self.hidden_dim, kernel_init=nn.initializers.xavier_uniform())(x)
-            y = nn.gelu(y)
+            y = nn.gelu(y, approximate=False)
             y = LayerNorm()(y)
             if i > 0:
                 x = x + y
@@ -216,7 +145,7 @@ class DropPath(nn.Module):
         deterministic = nn.merge_param(
             "deterministic", self.deterministic, deterministic
         )
-        if deterministic:
+        if deterministic or self.dropout_prob == 0.0:
             return input
         keep_prob = 1 - self.dropout_prob
         shape = (input.shape[0],) + (1,) * (input.ndim - 1)
@@ -238,8 +167,10 @@ class TransformerMLP(nn.Module):
             self.dim, kernel_init=self.kernel_init, name="fc1"
         )(inputs)
 
-        x = nn.gelu(x)
-        x = nn.Dropout(self.dropout)(x, deterministic)
+        x = nn.gelu(x, approximate=False)
+        if self.dropout > 0.0:
+            x = nn.Dropout(self.dropout)(x, deterministic)
+
         x = nn.Dense(
             self.out_dim, kernel_init=self.kernel_init, name="fc2"
         )(x)
@@ -286,7 +217,6 @@ class Attention(nn.Module):
             attention = jnp.where(padding_mask > 0, jnp.array(-1e7), attention)
 
         attention = nn.softmax(attention, axis=-1)
-        self.sow('intermediates', 'attention', attention)
         attention = nn.Dropout(self.att_drop)(attention, deterministic)
 
         x = (attention @ v).swapaxes(1, 2).reshape(batch, n, channels)
@@ -322,7 +252,9 @@ class Block(nn.Module):
             self.emb_dim * self.mlp_ratio, self.emb_dim, self.drop,
             name='mlp'
         )(x, deterministic)
+
         x = DropPath(self.drop_path)(x, deterministic)
+
         return inputs + x
 
 
@@ -347,18 +279,17 @@ class Transformer(nn.Module):
                 self.drop_path,
                 name=f'blocks_{n}'
             )(x, deterministic, padding_mask)
-
         x = LayerNorm(name='norm')(x)
         return x
 
 class MaskedAutoencoder(nn.Module):
-    emb_dim: int = 1024
-    dec_emb_dim: int = 512
-    depth: int = 24
-    dec_depth: int = 8
-    num_heads: int = 16
-    dec_num_heads: int = 16
-    mlp_ratio: int = 4
+    emb_dim: int
+    dec_emb_dim: int
+    depth: int
+    dec_depth: int
+    num_heads: int
+    dec_num_heads: int
+    mlp_ratio: int
 
     output_head_depth: int = 0
     att_drop: float = 0.0
@@ -367,39 +298,8 @@ class MaskedAutoencoder(nn.Module):
 
     image_mask_ratio: float = 0.75
     use_type_embedding: bool = False
-    image_output_dim: int = 768
-
-    # @staticmethod
-    # @nn.nowrap
-    # def get_default_config(updates=None):
-    #     config = ConfigDict()
-    #     config.model_type = config_dict.placeholder(str)
-    #     config.emb_dim = 1024
-    #     config.dec_emb_dim = 512
-    #     config.depth = 24
-    #     config.dec_depth = 8
-    #     config.num_heads = 16
-    #     config.dec_num_heads = 16
-    #     config.mlp_ratio = 4
-
-    #     config.output_head_depth = 0
-    #     # Dropout not applied in original MAE implementation.
-    #     config.att_drop = 0.0
-    #     config.drop = 0.0
-    #     config.drop_path = 0.0
-
-    #     # Tuned default mask ratio
-    #     config.image_mask_ratio = 0.75
-
-    #     config.use_type_embedding = True
-
-    #     if updates is not None:
-    #         config.update(ConfigDict(updates).copy_and_resolve_references())
-
-    #     if config.model_type is not None:
-    #         get_transformer_by_config(config.model_type, config)
-
-    #     return config
+    image_output_dim: int = 224
+    patch_size: int = 16
 
     @nn.nowrap
     def rng_keys(self):
@@ -416,22 +316,7 @@ class MaskedAutoencoder(nn.Module):
 
     def setup(self):
         self.patch_embed = PatchEmbed(embed_dim=self.emb_dim)
-        # self.image_embedding = nn.Dense(
-        #     self.emb_dim,
-        #     kernel_init=nn.initializers.xavier_uniform()
-        # )
-        # Type embeddings
-        if self.use_type_embedding:
-            self.encoder_image_type_embedding = self.param(
-                "encoder_image_type_embedding",
-                nn.initializers.normal(stddev=0.02, dtype=jnp.float32),
-                (1, 1, self.emb_dim),
-            )
-            self.decoder_image_type_embedding = self.param(
-                "decoder_image_type_embedding",
-                nn.initializers.normal(stddev=0.02, dtype=jnp.float32),
-                (1, 1, self.dec_emb_dim),
-            )
+        
 
         # CLS and masks
         self.cls_token = self.param(
@@ -439,6 +324,13 @@ class MaskedAutoencoder(nn.Module):
             nn.initializers.normal(stddev=0.02, dtype=jnp.float32),
             (1, 1, self.emb_dim),
         )
+        n_patches = (self.image_size // self.patch_size) ** 2
+        self.positional_embedding = self.param(
+            "pos_embed",
+            lambda rng, shape: get_fixed_pos_embed(shape[2], shape[1]),
+            (1, n_patches + 1, self.emb_dim)
+        )
+
         self.image_mask_embedding = self.param(
             "mask_token",
             nn.initializers.normal(stddev=0.02, dtype=jnp.float32),
@@ -478,29 +370,17 @@ class MaskedAutoencoder(nn.Module):
             name='decoder_image_output',
         )
 
-    def get_type_embedding(self, name):
-        if self.use_type_embedding:
-            return {
-                'encoder_image_type_embedding': self.encoder_image_type_embedding,
-                'decoder_image_type_embedding': self.decoder_image_type_embedding,
-            }[name]
-        else:
-            return 0.0
-
-    def forward_representation(self, image, deterministic=False):
+    def forward_representation(self, image, train=True):
         batch_size = image.shape[0]
         # image_x = self.image_embedding(image)
         image_x = self.patch_embed(image)
-        image_x = (
-            image_x
-            + get_2d_sincos_pos_embed(self.emb_dim, image_x.shape[1])
-            + self.get_type_embedding('encoder_image_type_embedding')
-        )
         cls_token = jnp.broadcast_to(
             self.cls_token, (batch_size, 1, self.emb_dim)
         )
         x = jnp.concatenate([cls_token, image_x], axis=1)
-        x = self.encoder(x, deterministic)
+        x = x + self.positional_embedding
+
+        x = self.encoder(x, not train)
         return x
 
     def forward_encoder(self, image, deterministic=False):
@@ -511,14 +391,14 @@ class MaskedAutoencoder(nn.Module):
 
         image_x = (
             image_x
-            + get_2d_sincos_pos_embed(self.emb_dim, image_x.shape[1])
-            + self.get_type_embedding('encoder_image_type_embedding')
+            + self.positional_embedding[:, 1:, :]
         )
         image_x, image_mask, image_ids_restore = random_masking(
             image_x, self.make_rng("noise"), image_keep_length
         )
         cls_token = jnp.broadcast_to(
-            self.cls_token, (batch_size, 1, self.emb_dim)
+            self.cls_token + self.positional_embedding[:, :1, :],
+            (batch_size, 1, self.emb_dim)
         )
         x = jnp.concatenate([cls_token, image_x], axis=1)
         x = self.encoder(x, deterministic)
@@ -548,7 +428,6 @@ class MaskedAutoencoder(nn.Module):
         image_x = (
             image_x
             + get_2d_sincos_pos_embed(self.dec_emb_dim, image_ids_restore.shape[0])
-            + self.get_type_embedding('decoder_image_type_embedding')
         )
 
         x = jnp.concatenate([encoder_cls, image_x], axis=1)
@@ -566,48 +445,49 @@ class MaskedAutoencoder(nn.Module):
         image_output = self.forward_decoder(x, image_ids_restore, deterministic)
         return image_output, image_mask, x
 
-class LinearCLS(nn.Module):
-    num_classes: int = 1000
-    pool: bool = False
+class MaskedAutoencoderVIT(nn.Module):
+    emb_dim: int
+    depth: int
+    num_heads: int
+    mlp_ratio: int
 
-    @nn.compact
-    def __call__(self, x, train=True):
-        if self.pool:
-            x = x[:, 1:, :].mean(axis=1)  # global pool without cls token
-        else:
-            x = x[:, 0]
-        norm = partial(
-            nn.BatchNorm,
-            use_running_average=not train,
-            momentum=0.9,
-            epsilon=1e-5,
-            use_scale=False,
-            use_bias=False,
-        )
-        x = norm(name="bn")(x)
-        logits = nn.Dense(self.num_classes)(x)
-        return logits
+    att_drop: float = 0.0
+    drop: float = 0.0
+    drop_path: float = 0.0
 
-class ViTRepresentation(MaskedAutoencoder):
+    patch_size: int = 16
+    image_size: int = 224
+    output_type: str = 'tokens'
+
+
+    @nn.nowrap
+    def rng_keys(self):
+        return ('params', 'noise', 'drop_path', 'dropout')
+
+    @nn.nowrap
+    def no_decay_list(self):
+        # model specific no decay list
+        no_decay = [
+            'cls_token', 'encoder_image_type_embedding', 'image_mask_embedding',
+            'bias',
+        ]
+        return no_decay
+
     def setup(self):
-        self.patch_embed = PatchEmbed(embed_dim=self.emb_dim)
-        # self.image_embedding = nn.Dense(
-        #     self.emb_dim,
-        #     kernel_init=nn.initializers.xavier_uniform()
-        # )
-        # Type embeddings
-        if self.use_type_embedding:
-            self.encoder_image_type_embedding = self.param(
-                "encoder_image_type_embedding",
-                nn.initializers.normal(stddev=0.02, dtype=jnp.float32),
-                (1, 1, self.emb_dim),
-            )
-
+        self.patch_embed = PatchEmbed(patch_size=self.patch_size,
+                                      embed_dim=self.emb_dim)
         # CLS and masks
         self.cls_token = self.param(
             "cls_token",
             nn.initializers.normal(stddev=0.02, dtype=jnp.float32),
             (1, 1, self.emb_dim),
+        )
+
+        n_patches = (self.image_size // self.patch_size) ** 2
+        self.positional_embedding = self.param(
+            "pos_embed",
+            lambda rng, shape: get_fixed_pos_embed(shape[2], shape[1]),
+            (1, n_patches + 1, self.emb_dim)
         )
 
         self.encoder = Transformer(
@@ -621,38 +501,29 @@ class ViTRepresentation(MaskedAutoencoder):
         )
 
     def __call__(self, image, train=True):
-        return self.forward_representation(image, not train)[:, 0]
+        batch_size = image.shape[0]
 
-class ViTClassifier(nn.Module):
-    base_model: nn.Module
-    num_classes: int
-    global_pool: bool = False
-    stop_gradient: bool = False
+        image_x = self.patch_embed(image)
 
-    @nn.nowrap
-    def rng_keys(self):
-        return ('params', 'noise', 'drop_path')
+        cls_token = jnp.broadcast_to(
+            self.cls_token, (batch_size, 1, self.emb_dim)
+        )
+        x = jnp.concatenate([cls_token, image_x], axis=1)
 
-    @nn.compact
-    def __call__(self, x, deterministic=False, features=False):
-        x = self.base_model.forward_representation(x, deterministic=deterministic)
-        if self.global_pool:
-            x = x[:, 1:, :].mean(axis=1)  # global pool without cls token
-        else:
+        x = x + self.positional_embedding
+
+        x = self.encoder(x, not train)
+
+        if self.output_type == 'tokens':
+            x = x
+        elif self.output_type == 'cls':
             x = x[:, 0]
-
-        z = x
-
-        x = LayerNorm()(x)
-        x = nn.Dense(self.num_classes)(x)
-        logits = x
-        log_probs = nn.log_softmax(x, axis=1)
-
-        if features:
-            return log_probs, logits, z
+        elif self.output_type == 'pooled':
+            x = x[:, 1:, :].mean(axis=1)
         else:
-            return logits
+            raise ValueError(f'Unknown output type {self.output_type}')
 
+        return x
 
 def map_to_jax(pytorch_key):
     if 'blocks' in pytorch_key[0]:
@@ -670,7 +541,7 @@ def map_to_jax(pytorch_key):
         elif 'decoder' in pytorch_key[0]:
             jax_key = ('decoder', pytorch_key[0].partition('_')[2], *pytorch_key[1:])
         else:
-            if pytorch_key[0] in ['cls_token', 'mask_token', 'patch_embed']:
+            if pytorch_key[0] in ['cls_token', 'mask_token', 'patch_embed', 'pos_embed']:
                 jax_key = pytorch_key
             else:
                 jax_key = ('encoder', *pytorch_key)
@@ -751,13 +622,18 @@ transformer_config_dicts = {
     }
 }
 
+def remove_decoder_config(kwargs):
+    return {k: v for k, v in kwargs.items() if not k.startswith('dec_')}
+
+
+
 mae_model_configs = {
     **{
     f'mae_{size}': partial(MaskedAutoencoder, **config)
     for size, config in transformer_config_dicts.items() 
     },
     **{
-    f'maerep_{size}': partial(ViTRepresentation, **config)
+    f'maerep_{size}': partial(MaskedAutoencoderVIT, **remove_decoder_config(config))
     for size, config in transformer_config_dicts.items() 
     },
 }
