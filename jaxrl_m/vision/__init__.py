@@ -8,6 +8,7 @@ from jaxrl_m.vision.mae import mae_model_configs
 from jaxrl_m.vision.vit import vit_configs
 
 from jaxrl_m.vision import data_augmentations
+from jaxrl_m.vision.preprocess import PreprocessEncoder, BasicPreprocessEncoder
 
 encoders = dict()
 encoders.update(impala_configs)

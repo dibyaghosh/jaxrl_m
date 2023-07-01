@@ -2,6 +2,7 @@
 
 from flax import linen as nn
 import jax.numpy as jnp
+import logging
 
 class AtariEncoder(nn.Module):
   """Class defining the actor-critic model."""
@@ -21,7 +22,10 @@ class AtariEncoder(nn.Module):
     github.com/openai/baselines/blob/master/baselines/ppo1/cnn_policy.py
     """
     dtype = jnp.float32
-    x = x.astype(dtype) / 255.
+    if x.dtype in [jnp.uint8, jnp.uint16, jnp.uint32, jnp.uint64]:
+        logging.warning('Observations seem to be [0, 255] int encoded images. This encoder expects float-normalized inputs.')
+        logging.warning('Use PreprocessEncoder to wrap this encoder to automatically normalize uint images to floats.')
+
     x = nn.Conv(features=32, kernel_size=(8, 8), strides=(4, 4), name='conv1',
                 dtype=dtype)(x)
     x = nn.relu(x)

@@ -6,7 +6,7 @@ from typing import Any, Callable, Sequence, Tuple
 
 import flax.linen as nn
 import jax.numpy as jnp
-
+import logging
 
 def default_init(scale: float = jnp.sqrt(2)):
     return nn.initializers.orthogonal(scale)
@@ -229,8 +229,10 @@ class ResNetEncoder(nn.Module):
     @nn.compact
     def __call__(self, observations: jnp.ndarray, train: bool = True,
                  cond_var=None):
-        
-        x = observations.astype(jnp.float32) / 255.0
+        if observations.dtype in [jnp.uint8, jnp.uint16, jnp.uint32, jnp.uint64]:
+            logging.warning('Observations seem to be [0, 255] int encoded images. This encoder expects float-normalized inputs.')
+            logging.warning('Use PreprocessEncoder to wrap this encoder to automatically normalize uint images to floats.')
+        # x = observations.astype(jnp.float32) / 255.0
         # x = jnp.reshape(x, (*x.shape[:-2], -1))
 
         conv = partial(self.conv, use_bias=False, dtype=self.dtype, kernel_init=kaiming_init())

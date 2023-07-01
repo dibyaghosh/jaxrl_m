@@ -24,6 +24,7 @@ from typing import Optional, Sequence, Union
 import flax.linen as nn
 import jax.numpy as jnp
 import jax
+import logging
 
 def standardize(x, axis, eps):
   x = x - jnp.mean(x, axis=axis, keepdims=True)
@@ -128,14 +129,13 @@ class Model(nn.Module):
   num_classes: int
   width: int = 1
   depth: Union[int, Sequence[int]] = 50  # 5/101/152, or list of block depths.
-  image_shape: tuple = None
 
   @nn.compact
   def __call__(self, x, *, train=False):
-    if self.image_shape is not None:
-      x = jax.image.resize(x, (*x.shape[:-3], *self.image_shape, x.shape[-1]), 'bilinear')
-      print('Resizing to %s' % str(self.image_shape))
-    x = x / 255.0
+    if x.dtype in [jnp.uint8, jnp.uint16, jnp.uint32, jnp.uint64]:
+        logging.warning('Observations seem to be [0, 255] int encoded images. This encoder expects float-normalized inputs.')
+        logging.warning('Use PreprocessEncoder to wrap this encoder to automatically normalize uint images to floats.')
+
     blocks = get_block_desc(self.depth)
     width = int(64 * self.width)
     out = {}
